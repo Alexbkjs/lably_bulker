@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lably Bulker</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="header-left">
+        <p class="subtitle" id="subtitle"></p>
+      </div>
+      <div class="header-right">
+        <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
+          <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+          <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </button>
+        <span class="version">v1.0.0</span>
+      </div>
+    </header>
+
+    <section class="status-section">
+      <div class="status-row">
+        <span class="status-label">Status</span>
+        <span class="status-badge disconnected" id="status-badge">Disconnected</span>
+      </div>
+      <div class="status-row" id="store-row" style="display:none">
+        <span class="status-label">Store</span>
+        <span class="status-value" id="store-name"></span>
+      </div>
+    </section>
+
+    <!-- Mode Buttons -->
+    <section class="mode-section">
+      <div class="button-row">
+        <button id="btn-update-labels" class="btn btn-mode" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          <span>Update Labels</span>
+        </button>
+        <button id="btn-update-badges" class="btn btn-mode" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          <span>Update Badges</span>
+        </button>
+      </div>
+      <div class="button-row" style="margin-top:8px">
+        <button id="btn-export" class="btn btn-export" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span>Export</span>
+        </button>
+        <button id="btn-import" class="btn btn-import" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>Import</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Filter Tabs -->
+    <section class="filter-section">
+      <div class="filter-tabs" id="filter-tabs">
+        <button class="filter-tab active" data-filter="all">All <span class="tab-count" id="count-all">0</span></button>
+        <button class="filter-tab" data-filter="label">Labels <span class="tab-count" id="count-labels">0</span></button>
+        <button class="filter-tab" data-filter="badge">Badges <span class="tab-count" id="count-badges">0</span></button>
+      </div>
+      <div class="showing-count" id="showing-count">Showing 0 of 0 items</div>
+    </section>
+
+    <!-- Items List -->
+    <section class="items-section">
+      <div id="items-list" class="items-list">
+        <div class="empty-state">Connect to a store to see items.</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Update Modal -->
+  <div class="modal-overlay" id="update-modal" style="display:none">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="modal-title">Update Items</h2>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-cancel" id="modal-cancel">Cancel</button>
+        <button class="btn btn-apply" id="modal-apply">Apply Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
