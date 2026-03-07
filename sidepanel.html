@@ -13,7 +13,13 @@
         <p class="subtitle" id="subtitle"></p>
       </div>
       <div class="header-right">
-        <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
+        <button id="sync-btn" class="header-icon-btn" title="Sync data" disabled>
+          <svg class="sync-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </button>
+        <button id="theme-toggle" class="header-icon-btn" title="Toggle theme">
           <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
             <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
@@ -39,19 +45,9 @@
       </div>
     </section>
 
-    <!-- Mode Buttons -->
+    <!-- Action Buttons -->
     <section class="mode-section">
       <div class="button-row">
-        <button id="btn-update-labels" class="btn btn-mode" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-          <span>Update Labels</span>
-        </button>
-        <button id="btn-update-badges" class="btn btn-mode" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-          <span>Update Badges</span>
-        </button>
-      </div>
-      <div class="button-row" style="margin-top:8px">
         <button id="btn-export" class="btn btn-export" disabled>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           <span>Export</span>
@@ -79,6 +75,15 @@
         <div class="empty-state">Connect to a store to see items.</div>
       </div>
     </section>
+  </div>
+
+  <!-- Bulk Save Bar -->
+  <div id="bulk-save-bar" class="bulk-save-bar" style="display:none">
+    <span id="bulk-save-text">Update 0 items</span>
+    <div class="bulk-save-actions">
+      <button id="bulk-save-cancel" class="btn btn-cancel btn-sm">Cancel</button>
+      <button id="bulk-save-apply" class="btn btn-apply btn-sm">Save</button>
+    </div>
   </div>
 
   <!-- Update Modal -->

@@ -13,10 +13,43 @@ const SUBTITLES = [
 const VISIBILITY_SHORT = {
   "Home Page": "HP",
   "Product Pages": "PP",
-  "Search Results Pages": "SR",
-  "Cart Page": "CP",
-  "Collection Pages": "CL",
+  "Search Results Pages": "SRP",
+  "Cart Page": "CaP",
+  "Collection Pages": "CP",
   "Other Pages": "OP",
+};
+
+const ALL_PAGE_CODES = ["HP", "PP", "SRP", "CP", "CaP", "OP"];
+const PAGE_NAMES = {
+  HP: "Home Page", PP: "Product Page", SRP: "Search Results Page",
+  CP: "Collection Page", CaP: "Cart Page", OP: "Other Pages",
+};
+const FULL_NAME_TO_CODE = {
+  "Home Page": "HP", "Product Page": "PP", "Product Pages": "PP",
+  "Search Results Page": "SRP", "Search Results Pages": "SRP",
+  "Collection Page": "CP", "Collection Pages": "CP",
+  "Cart Page": "CaP", "Other Pages": "OP", "Other Page": "OP",
+};
+
+// Shape CSS from sel_lably LabelPreview
+const SHAPE_STYLES = {
+  rectangle: "",
+  square: "aspect-ratio:1;",
+  circle: "border-radius:50%;aspect-ratio:1;",
+  "parallelogram-right": "transform:skewX(-10deg);",
+  "parallelogram-left": "transform:skewX(10deg);",
+  "tag-right": "clip-path:polygon(0 0, calc(100% - 6px) 0, 100% 50%, calc(100% - 6px) 100%, 0 100%);",
+  "tag-left": "clip-path:polygon(6px 0, 100% 0, 100% 100%, 6px 100%, 0 50%);",
+  "chev-right": "clip-path:polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%, 8px 50%);",
+  "chev-left": "clip-path:polygon(8px 0, 100% 0, calc(100% - 8px) 50%, 100% 100%, 8px 100%, 0 50%);",
+  "trapezoid-top-left": "clip-path:polygon(12% 0, 100% 0, 100% 100%, 0 100%);",
+  "trapezoid-top-right": "clip-path:polygon(0 0, 88% 0, 100% 100%, 0 100%);",
+  "trapezoid-bottom-left": "clip-path:polygon(0 0, 100% 0, 100% 100%, 12% 100%);",
+  "trapezoid-bottom-right": "clip-path:polygon(0 0, 100% 0, 88% 100%, 0 100%);",
+  "triangle-top-left": "clip-path:polygon(0 0, 100% 0, 0 100%);",
+  "triangle-top-right": "clip-path:polygon(0 0, 100% 0, 100% 100%);",
+  "triangle-bottom-left": "clip-path:polygon(0 0, 0 100%, 100% 100%);",
+  "triangle-bottom-right": "clip-path:polygon(100% 0, 0 100%, 100% 100%);",
 };
 
 // --- State ---
@@ -25,15 +58,15 @@ let allItems = [];
 let filteredItems = [];
 let selectedIds = new Set();
 let currentFilter = "all";
-let currentUpdateMode = null;
 let busy = false;
+let pendingSelectorEdits = {}; // { itemId: newSelectorValue }
+let pendingAdvancedEdits = {}; // { itemId: { fontSize: {desktop,tablet,mobile}, width: {...}, height: {...}, padding: {...}, margin: {...} } }
+let advancedOpenIds = new Set(); // which cards have the advanced panel open
 
 // --- DOM ---
 const statusBadge = document.getElementById("status-badge");
 const storeRow = document.getElementById("store-row");
 const storeNameEl = document.getElementById("store-name");
-const btnUpdateLabels = document.getElementById("btn-update-labels");
-const btnUpdateBadges = document.getElementById("btn-update-badges");
 const btnExport = document.getElementById("btn-export");
 const btnImport = document.getElementById("btn-import");
 const filterTabs = document.getElementById("filter-tabs");
@@ -41,12 +74,17 @@ const itemsList = document.getElementById("items-list");
 const showingCount = document.getElementById("showing-count");
 const subtitleEl = document.getElementById("subtitle");
 const themeToggle = document.getElementById("theme-toggle");
+const syncBtn = document.getElementById("sync-btn");
 const updateModal = document.getElementById("update-modal");
 const modalTitle = document.getElementById("modal-title");
 const modalBody = document.getElementById("modal-body");
 const modalClose = document.getElementById("modal-close");
 const modalCancel = document.getElementById("modal-cancel");
 const modalApply = document.getElementById("modal-apply");
+const bulkSaveBar = document.getElementById("bulk-save-bar");
+const bulkSaveText = document.getElementById("bulk-save-text");
+const bulkSaveCancel = document.getElementById("bulk-save-cancel");
+const bulkSaveApply = document.getElementById("bulk-save-apply");
 
 console.log("[Lably SP] Sidepanel script loaded");
 
@@ -115,6 +153,20 @@ themeToggle.addEventListener("click", async () => {
 });
 
 // ===========================================================================
+// SYNC
+// ===========================================================================
+syncBtn.addEventListener("click", async () => {
+  if (busy || !isConnected()) return;
+  const icon = syncBtn.querySelector(".sync-icon");
+  icon.classList.add("spinning");
+  try {
+    await loadItems();
+  } finally {
+    icon.classList.remove("spinning");
+  }
+});
+
+// ===========================================================================
 // STATUS
 // ===========================================================================
 function isConnected() {
@@ -136,10 +188,9 @@ function updateStatus() {
 
 function updateButtonStates() {
   const connected = isConnected();
-  btnUpdateLabels.disabled = !connected;
-  btnUpdateBadges.disabled = !connected;
   btnExport.disabled = !connected || selectedIds.size === 0;
   btnImport.disabled = !connected;
+  syncBtn.disabled = !connected || busy;
 }
 
 // ===========================================================================
@@ -400,6 +451,166 @@ function applyFilter() {
 }
 
 // ===========================================================================
+// RENDER HELPERS
+// ===========================================================================
+function normalizeVisibility(visibility) {
+  if (!Array.isArray(visibility)) return ALL_PAGE_CODES;
+  return visibility
+    .map((v) => {
+      if (typeof v !== "string") return null;
+      if (ALL_PAGE_CODES.includes(v)) return v;
+      return FULL_NAME_TO_CODE[v] || null;
+    })
+    .filter(Boolean);
+}
+
+function getVoPStatus(item) {
+  const pages = normalizeVisibility(item.settings?.visibility);
+  const full = pages.length >= 6;
+  return {
+    status: full ? "ok" : "warning",
+    tooltip: full ? "Visible on all pages" : "Visible on: " + pages.map((c) => PAGE_NAMES[c]).join(", "),
+  };
+}
+
+function getWSStatus(item) {
+  const ws = item.settings?.weekSchedule;
+  if (!ws) return { status: "ok", tooltip: "No week schedule restrictions" };
+  const allNull = ws.every((d) => d === null);
+  return allNull
+    ? { status: "ok", tooltip: "No week schedule restrictions" }
+    : { status: "warning", tooltip: "Custom week schedule active" };
+}
+
+function getDPStatus(item) {
+  const dp = item.settings?.displayPeriod;
+  if (!dp || dp.allTime === true) return { status: "ok", tooltip: "Displayed all time" };
+  const fmt = (d) => d ? new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : null;
+  const s = fmt(dp.start || dp.startDate);
+  const e = fmt(dp.end || dp.endDate);
+  let tip = "Custom display period";
+  if (s && e) tip = `${s} \u2192 ${e}`;
+  else if (s) tip = `From ${s}`;
+  else if (e) tip = `Until ${e}`;
+  return { status: "warning", tooltip: tip };
+}
+
+function getDCStatus(item) {
+  const dc = item.settings?.displayCondition;
+  if (!dc) return { status: "ok", tooltip: "No display conditions" };
+  if (dc.type && dc.variants && dc.variants.length > 0) {
+    const names = dc.variants.map((v) => v.id || "condition");
+    const unique = [...new Set(names)];
+    return { status: "warning", tooltip: unique.slice(0, 3).join(", ") + (unique.length > 3 ? `, +${unique.length - 3} more` : "") };
+  }
+  if (dc.type && dc.type !== "any") return { status: "warning", tooltip: "Display condition: " + dc.type };
+  return { status: "ok", tooltip: "No display conditions" };
+}
+
+function getPreviewHtml(item) {
+  const styles = item.settings?.styles ?? item.style;
+  const font = styles?.font;
+  const bgColor = font?.color?.background || styles?.backgroundColor || "#E23737";
+  const textColor = font?.color?.text || styles?.textColor || "#ffffff";
+  const shape = styles?.shape || "rectangle";
+  const shapeStyle = SHAPE_STYLES[shape] || "";
+
+  const isImage = item.subtype === "image" && item.previewLink;
+  if (isImage) {
+    return `<div class="item-preview-wrap"><img src="${esc(item.previewLink)}" style="width:38px;height:24px;object-fit:contain;border-radius:2px"></div>`;
+  }
+
+  const textValue = item.textValue?.original || (item.type === "badge" ? "Sale" : "Label");
+  const truncated = textValue.length > 6 ? textValue.substring(0, 5) + ".." : textValue;
+
+  // Counter-transform for parallelogram text
+  let textStyle = "";
+  if (shape === "parallelogram-right") textStyle = "transform:skewX(10deg);";
+  else if (shape === "parallelogram-left") textStyle = "transform:skewX(-10deg);";
+
+  return `<div class="item-preview-wrap"><div class="item-preview-shape" style="background:${esc(bgColor)};color:${esc(textColor)};${shapeStyle}"><span style="padding:0 2px;${textStyle}">${esc(truncated)}</span></div></div>`;
+}
+
+function buildUnitTabs(units, activeUnit, dataAttr) {
+  return `<span class="adv-unit-tabs" data-unit-for="${dataAttr}">${
+    units.map((u) => `<button class="adv-unit-tab${u === activeUnit ? " active" : ""}" data-unit-val="${u}">${u}</button>`).join("")
+  }</span>`;
+}
+
+function respLabel(full, short) {
+  return `<span class="label-full">${full}</span><span class="label-short">${short}</span>`;
+}
+
+function buildAdvancedPanel(item) {
+  const id = item.id;
+  const adv = pendingAdvancedEdits[id] || {};
+  const device = adv._device || "desktop";
+  const s = item.settings || {};
+  const font = s.styles?.font || {};
+  const sizeObj = s.styles?.size || {};
+  const marginObj = s.styles?.margin || {};
+  const paddingObj = font.padding || {};
+
+  // Unit helpers: read from pending edits first, then from item data
+  const fsUnit = adv.fontSizeUnit || font.size?.[device]?.unit || font.size?.desktop?.unit || "px";
+  const sizeUnit = adv.sizeUnit || sizeObj[device]?.unit || sizeObj.desktop?.unit || "px";
+  const padUnit = adv.paddingUnit || paddingObj[device]?.unit || paddingObj.desktop?.unit || "px";
+  const marUnit = adv.marginUnit || marginObj[device]?.unit || marginObj.desktop?.unit || "px";
+
+  // Value getters - show actual data, empty string means "not set"
+  const val = (v) => (v === null || v === undefined || v === "") ? "" : v;
+  const getFontSize = () => val(adv.fontSize?.[device] ?? font.size?.[device]?.value);
+  const getWidth = () => val(adv.width?.[device] ?? sizeObj[device]?.width);
+  const getHeight = () => val(adv.height?.[device] ?? sizeObj[device]?.height);
+  const getPad = (side) => val(adv.padding?.[device]?.[side] ?? paddingObj[device]?.[side]);
+  const getMar = (side) => val(adv.margin?.[device]?.[side] ?? marginObj[device]?.[side]);
+
+  return `
+    <div class="item-advanced-panel" data-adv-id="${esc(id)}">
+      <div class="adv-device-tabs">
+        <button class="adv-device-tab${device === "desktop" ? " active" : ""}" data-device="desktop">Desktop</button>
+        <button class="adv-device-tab${device === "tablet" ? " active" : ""}" data-device="tablet">Tablet</button>
+        <button class="adv-device-tab${device === "mobile" ? " active" : ""}" data-device="mobile">Mobile</button>
+      </div>
+      <div class="adv-group">
+        <div class="adv-grid">
+          <div class="adv-field adv-field-full">
+            <label>Font Size ${buildUnitTabs(["px", "rem", "em"], fsUnit, "fontSizeUnit")}</label>
+            <input type="number" step="any" data-field="fontSize" value="${esc(getFontSize())}" placeholder="-">
+          </div>
+          <div class="adv-field">
+            <label>Width ${buildUnitTabs(["px", "%"], sizeUnit, "sizeUnit")}</label>
+            <input type="number" step="any" data-field="width" value="${esc(getWidth())}" placeholder="-">
+          </div>
+          <div class="adv-field">
+            <label>Height</label>
+            <input type="number" step="any" data-field="height" value="${esc(getHeight())}" placeholder="-">
+          </div>
+        </div>
+      </div>
+      <div class="adv-group">
+        <div class="adv-group-title">Padding ${buildUnitTabs(["px", "%"], padUnit, "paddingUnit")}</div>
+        <div class="adv-4col">
+          <div class="adv-field"><label>${respLabel("Top", "T")}</label><input type="number" step="any" data-field="padding-top" value="${esc(getPad("top"))}" placeholder="-"></div>
+          <div class="adv-field"><label>${respLabel("Right", "R")}</label><input type="number" step="any" data-field="padding-right" value="${esc(getPad("right"))}" placeholder="-"></div>
+          <div class="adv-field"><label>${respLabel("Bottom", "B")}</label><input type="number" step="any" data-field="padding-bottom" value="${esc(getPad("bottom"))}" placeholder="-"></div>
+          <div class="adv-field"><label>${respLabel("Left", "L")}</label><input type="number" step="any" data-field="padding-left" value="${esc(getPad("left"))}" placeholder="-"></div>
+        </div>
+      </div>
+      <div class="adv-group">
+        <div class="adv-group-title">Margin ${buildUnitTabs(["px", "%"], marUnit, "marginUnit")}</div>
+        <div class="adv-4col">
+          <div class="adv-field"><label>${respLabel("Top", "T")}</label><input type="number" step="any" data-field="margin-top" value="${esc(getMar("top"))}" placeholder="-"></div>
+          <div class="adv-field"><label>${respLabel("Right", "R")}</label><input type="number" step="any" data-field="margin-right" value="${esc(getMar("right"))}" placeholder="-"></div>
+          <div class="adv-field"><label>${respLabel("Bottom", "B")}</label><input type="number" step="any" data-field="margin-bottom" value="${esc(getMar("bottom"))}" placeholder="-"></div>
+          <div class="adv-field"><label>${respLabel("Left", "L")}</label><input type="number" step="any" data-field="margin-left" value="${esc(getMar("left"))}" placeholder="-"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ===========================================================================
 // RENDER ITEMS
 // ===========================================================================
 function renderItems() {
@@ -419,51 +630,58 @@ function renderItems() {
   for (const item of filteredItems) {
     const isSelected = selectedIds.has(item.id);
     const timeAgo = getTimeAgo(item.updatedAt || item.createdAt);
-    const selector = item.settings?.position?.selector;
-    const visibility = item.settings?.visibility || [];
+    const selector = pendingSelectorEdits[item.id] ?? item.settings?.position?.selector ?? "";
+    const isBadge = item.type === "badge";
+    const isDraft = item.status !== "published";
+    const isAdvOpen = advancedOpenIds.has(item.id);
 
-    const bgColor = item.settings?.styles?.font?.color?.background || "#E23737";
-    const textColor = item.settings?.styles?.font?.color?.text || "#ffffff";
-    const textValue = item.textValue?.original || (item.type === "badge" ? "Sale" : "Label");
+    // Status indicators
+    const vop = getVoPStatus(item);
+    const ws = getWSStatus(item);
+    const dp = getDPStatus(item);
+    const dc = getDCStatus(item);
 
-    const hasWeekSchedule = (item.settings?.weekSchedule || []).some((s) => s !== null);
-    const hasDisplayPeriod = item.settings?.displayPeriod?.allTime === false;
-    const displayConditionType = item.settings?.displayCondition?.type || "any";
+    const tagHtml = (code, info) =>
+      `<span class="item-tag ${info.status}"><span class="item-tag-tooltip">${esc(info.tooltip)}</span>${code}</span>`;
 
-    const featureTags = [];
-    if (visibility.length > 0) featureTags.push("VOP");
-    if (hasWeekSchedule) featureTags.push("WS");
-    if (hasDisplayPeriod) featureTags.push("DP");
-    if (displayConditionType !== "any") featureTags.push("DC");
+    const tagsHtml = tagHtml("VoP", vop) + tagHtml("WS", ws) + tagHtml("DP", dp) + tagHtml("DC", dc);
 
-    const featureTagsHtml = featureTags.map((t) => `<span class="item-tag">${t}</span>`).join("");
+    const selectorHtml = `
+      <div class="item-selector editable${pendingSelectorEdits[item.id] !== undefined ? " edited" : ""}" data-selector-id="${esc(item.id)}" title="Click to edit selector">
+        <span class="item-selector-text">${selector ? esc(selector.length > 25 ? selector.slice(0, 25) + "..." : selector) : '<span style="opacity:0.4">no selector</span>'}</span>
+        <button class="item-selector-copy" data-copy="${esc(selector || "")}" title="Copy selector">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>`;
+
+    const cardClasses = [
+      "item-card",
+      isSelected ? "selected" : "",
+      isDraft ? "draft" : "",
+    ].filter(Boolean).join(" ");
 
     html += `
-      <div class="item-card ${isSelected ? "selected" : ""}" data-id="${esc(item.id)}">
+      <div class="${cardClasses}" data-id="${esc(item.id)}">
         <div class="item-card-top">
           <input type="checkbox" class="item-checkbox" data-id="${esc(item.id)}" ${isSelected ? "checked" : ""}>
-          <div class="item-preview" style="background:${esc(bgColor)};color:${esc(textColor)}">
-            ${esc(textValue.length > 6 ? textValue.substring(0, 5) + ".." : textValue)}
-          </div>
+          ${getPreviewHtml(item)}
           <div class="item-details">
             <div class="item-header">
-              <span class="item-name">${esc(item.name)}</span>
+              <span class="item-name${isDraft ? " draft-name" : ""}${selectedIds.size >= 2 && isSelected ? " item-name-editable" : ""}" ${selectedIds.size >= 2 && isSelected ? 'data-rename="1"' : ""}>${esc(item.name)}</span>
               <span class="item-time">${esc(timeAgo)}</span>
             </div>
-            <div class="item-id">
-              #${esc(item.id)}
-              <span class="item-status ${item.status}">${esc(item.status)}</span>
+            <div class="item-id-row">
+              <span class="item-id">#${esc(item.id)}</span>
+              <span class="item-id-divider"></span>
+              <div class="item-tags">${tagsHtml}</div>
             </div>
-            <div class="item-tags">${featureTagsHtml}</div>
-            ${selector ? `<div class="item-selector">
-                <span class="item-selector-text">${esc(selector)}</span>
-                <button class="item-selector-copy" data-copy="${esc(selector)}" title="Copy selector">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                </button>
-              </div>` : ""}
+            ${selectorHtml}
           </div>
         </div>
-        <div class="item-type-badge type-${esc(item.type)}">${item.type === "badge" ? "B" : "L"}</div>
+        ${isAdvOpen ? buildAdvancedPanel(item) : ""}
+        ${isBadge ? '<div class="item-badge-corner">B</div>' : ""}
+        ${isDraft ? '<div class="item-draft-corner">Draft</div>' : ""}
+        <button class="item-advanced-btn${isAdvOpen ? " active" : ""}" data-adv-toggle="${esc(item.id)}" title="Advanced settings">\u{1F9E9}</button>
       </div>
     `;
   }
@@ -472,13 +690,18 @@ function renderItems() {
 
   // Select all
   document.getElementById("select-all")?.addEventListener("change", (e) => {
-    if (e.target.checked) {
-      filteredItems.forEach((i) => selectedIds.add(i.id));
-    } else {
-      filteredItems.forEach((i) => selectedIds.delete(i.id));
-    }
+    if (e.target.checked) filteredItems.forEach((i) => selectedIds.add(i.id));
+    else filteredItems.forEach((i) => selectedIds.delete(i.id));
     renderItems();
     updateButtonStates();
+  });
+
+  // Name click → open rename modal when 2+ selected
+  itemsList.querySelectorAll(".item-name-editable").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openRenameModal();
+    });
   });
 
   // Individual checkboxes
@@ -492,10 +715,12 @@ function renderItems() {
     });
   });
 
-  // Card click
+  // Card click (toggle selection)
   itemsList.querySelectorAll(".item-card").forEach((card) => {
     card.addEventListener("click", (e) => {
-      if (e.target.closest(".item-checkbox") || e.target.closest(".item-selector-copy")) return;
+      if (e.target.closest(".item-checkbox") || e.target.closest(".item-selector-copy") ||
+          e.target.closest(".item-selector.editable") || e.target.closest(".item-advanced-btn") ||
+          e.target.closest(".item-advanced-panel")) return;
       const id = card.dataset.id;
       if (selectedIds.has(id)) selectedIds.delete(id);
       else selectedIds.add(id);
@@ -512,7 +737,349 @@ function renderItems() {
       showToast("Selector copied", "info");
     });
   });
+
+  // Inline selector editing
+  itemsList.querySelectorAll(".item-selector.editable").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest(".item-selector-copy")) return;
+      e.stopPropagation();
+      const itemId = el.dataset.selectorId;
+      const item = allItems.find((i) => i.id === itemId);
+      const currentVal = pendingSelectorEdits[itemId] ?? item?.settings?.position?.selector ?? "";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "item-selector-input";
+      input.value = currentVal;
+      input.placeholder = "e.g., .product-title";
+      el.replaceWith(input);
+      input.focus();
+      input.select();
+
+      const commitEdit = () => {
+        const newVal = input.value.trim();
+        const origVal = item?.settings?.position?.selector ?? "";
+        if (newVal !== origVal) {
+          pendingSelectorEdits[itemId] = newVal;
+          if (selectedIds.has(itemId) && selectedIds.size > 1) {
+            selectedIds.forEach((sid) => {
+              if (sid !== itemId) pendingSelectorEdits[sid] = newVal;
+            });
+          }
+        } else {
+          delete pendingSelectorEdits[itemId];
+          if (selectedIds.has(itemId)) {
+            selectedIds.forEach((sid) => {
+              const sItem = allItems.find((i) => i.id === sid);
+              const sOrig = sItem?.settings?.position?.selector ?? "";
+              if (pendingSelectorEdits[sid] === sOrig) delete pendingSelectorEdits[sid];
+            });
+          }
+        }
+        updateBulkSaveBar();
+        renderItems();
+      };
+
+      input.addEventListener("blur", commitEdit);
+      input.addEventListener("keydown", (ke) => {
+        if (ke.key === "Enter") { ke.preventDefault(); input.blur(); }
+        if (ke.key === "Escape") {
+          delete pendingSelectorEdits[itemId];
+          updateBulkSaveBar();
+          renderItems();
+        }
+      });
+    });
+  });
+
+  // Advanced toggle
+  itemsList.querySelectorAll(".item-advanced-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.advToggle;
+      if (advancedOpenIds.has(id)) advancedOpenIds.delete(id);
+      else advancedOpenIds.add(id);
+      renderItems();
+    });
+  });
+
+  // Advanced panel: device tabs, unit tabs & field inputs
+  itemsList.querySelectorAll(".item-advanced-panel").forEach((panel) => {
+    const itemId = panel.dataset.advId;
+
+    panel.querySelectorAll(".adv-device-tab").forEach((tab) => {
+      tab.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!pendingAdvancedEdits[itemId]) pendingAdvancedEdits[itemId] = {};
+        pendingAdvancedEdits[itemId]._device = tab.dataset.device;
+        renderItems();
+      });
+    });
+
+    // Unit tabs
+    panel.querySelectorAll(".adv-unit-tabs").forEach((group) => {
+      group.querySelectorAll(".adv-unit-tab").forEach((tab) => {
+        tab.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const unitFor = group.dataset.unitFor;
+          const unitVal = tab.dataset.unitVal;
+          if (!pendingAdvancedEdits[itemId]) pendingAdvancedEdits[itemId] = {};
+          pendingAdvancedEdits[itemId][unitFor] = unitVal;
+          // Propagate to selected
+          if (selectedIds.has(itemId) && selectedIds.size > 1) {
+            selectedIds.forEach((sid) => {
+              if (sid === itemId) return;
+              if (!pendingAdvancedEdits[sid]) pendingAdvancedEdits[sid] = {};
+              pendingAdvancedEdits[sid][unitFor] = unitVal;
+            });
+          }
+          updateBulkSaveBar();
+          renderItems();
+        });
+      });
+    });
+
+    panel.querySelectorAll("input[data-field]").forEach((inp) => {
+      inp.addEventListener("click", (e) => e.stopPropagation());
+      inp.addEventListener("change", (e) => {
+        e.stopPropagation();
+        const field = inp.dataset.field;
+        if (!pendingAdvancedEdits[itemId]) pendingAdvancedEdits[itemId] = {};
+        const adv = pendingAdvancedEdits[itemId];
+        const device = adv._device || "desktop";
+        const val = inp.value.trim() === "" ? null : Number(inp.value);
+
+        if (field === "fontSize") {
+          if (!adv.fontSize) adv.fontSize = {};
+          adv.fontSize[device] = val;
+        } else if (field === "width") {
+          if (!adv.width) adv.width = {};
+          adv.width[device] = val;
+        } else if (field === "height") {
+          if (!adv.height) adv.height = {};
+          adv.height[device] = val;
+        } else if (field.startsWith("padding-")) {
+          const side = field.replace("padding-", "");
+          if (!adv.padding) adv.padding = {};
+          if (!adv.padding[device]) adv.padding[device] = {};
+          adv.padding[device][side] = val;
+        } else if (field.startsWith("margin-")) {
+          const side = field.replace("margin-", "");
+          if (!adv.margin) adv.margin = {};
+          if (!adv.margin[device]) adv.margin[device] = {};
+          adv.margin[device][side] = val;
+        }
+
+        // Propagate to all selected
+        if (selectedIds.has(itemId) && selectedIds.size > 1) {
+          selectedIds.forEach((sid) => {
+            if (sid === itemId) return;
+            if (!pendingAdvancedEdits[sid]) pendingAdvancedEdits[sid] = {};
+            const sadv = pendingAdvancedEdits[sid];
+            sadv._device = device;
+            if (field === "fontSize") { if (!sadv.fontSize) sadv.fontSize = {}; sadv.fontSize[device] = val; }
+            else if (field === "width") { if (!sadv.width) sadv.width = {}; sadv.width[device] = val; }
+            else if (field === "height") { if (!sadv.height) sadv.height = {}; sadv.height[device] = val; }
+            else if (field.startsWith("padding-")) {
+              const s = field.replace("padding-", "");
+              if (!sadv.padding) sadv.padding = {};
+              if (!sadv.padding[device]) sadv.padding[device] = {};
+              sadv.padding[device][s] = val;
+            } else if (field.startsWith("margin-")) {
+              const s = field.replace("margin-", "");
+              if (!sadv.margin) sadv.margin = {};
+              if (!sadv.margin[device]) sadv.margin[device] = {};
+              sadv.margin[device][s] = val;
+            }
+          });
+        }
+
+        updateBulkSaveBar();
+      });
+    });
+  });
 }
+
+// ===========================================================================
+// BULK SAVE BAR — inline selector edits
+// ===========================================================================
+function hasAdvancedEdits(adv) {
+  if (!adv) return false;
+  const skipKeys = new Set(["_device", "fontSizeUnit", "sizeUnit", "paddingUnit", "marginUnit"]);
+  let hasValues = false;
+  let hasUnitChange = false;
+  for (const key of Object.keys(adv)) {
+    if (skipKeys.has(key)) {
+      if (key !== "_device") hasUnitChange = true;
+      continue;
+    }
+    const val = adv[key];
+    if (val && typeof val === "object") {
+      for (const dk of Object.keys(val)) {
+        const dv = val[dk];
+        if (dv !== null && dv !== undefined && dv !== "") {
+          if (typeof dv === "object") {
+            if (Object.values(dv).some((v) => v !== null && v !== undefined && v !== "")) hasValues = true;
+          } else hasValues = true;
+        }
+      }
+    }
+  }
+  return hasValues;
+}
+
+function updateBulkSaveBar() {
+  const selectorIds = Object.keys(pendingSelectorEdits);
+  const advIds = Object.keys(pendingAdvancedEdits).filter((id) => hasAdvancedEdits(pendingAdvancedEdits[id]));
+  const allEditIds = new Set([...selectorIds, ...advIds]);
+  const editCount = allEditIds.size;
+
+  if (editCount > 0) {
+    bulkSaveText.textContent = `Update ${editCount} item${editCount > 1 ? "s" : ""}`;
+    bulkSaveBar.style.display = "flex";
+  } else {
+    bulkSaveBar.style.display = "none";
+  }
+}
+
+bulkSaveCancel.addEventListener("click", () => {
+  pendingSelectorEdits = {};
+  pendingAdvancedEdits = {};
+  updateBulkSaveBar();
+  renderItems();
+});
+
+bulkSaveApply.addEventListener("click", async () => {
+  const selectorEdits = { ...pendingSelectorEdits };
+  const advEdits = JSON.parse(JSON.stringify(pendingAdvancedEdits));
+  const selectorIds = Object.keys(selectorEdits);
+  const advIds = Object.keys(advEdits).filter((id) => hasAdvancedEdits(advEdits[id]));
+  const allEditIds = [...new Set([...selectorIds, ...advIds])];
+  if (allEditIds.length === 0) return;
+
+  bulkSaveApply.disabled = true;
+  bulkSaveCancel.disabled = true;
+  busy = true;
+
+  let successCount = 0;
+  let failCount = 0;
+
+  try {
+    const idToken = await getAdminToken();
+
+    for (const itemId of allEditIds) {
+      const item = allItems.find((i) => i.id === itemId);
+      if (!item) { failCount++; continue; }
+
+      try {
+        const full = JSON.parse(JSON.stringify(item));
+        if (!full.settings) full.settings = {};
+
+        // Apply selector edit
+        if (selectorEdits[itemId] !== undefined) {
+          if (!full.settings.position) full.settings.position = {};
+          full.settings.position.selector = selectorEdits[itemId];
+        }
+
+        // Apply advanced edits
+        const adv = advEdits[itemId];
+        if (adv && hasAdvancedEdits(adv)) {
+          if (!full.settings.styles) full.settings.styles = {};
+          const st = full.settings.styles;
+
+          const fsUnit = adv.fontSizeUnit || "px";
+          const szUnit = adv.sizeUnit || "px";
+          const padUnitVal = adv.paddingUnit || "px";
+          const marUnitVal = adv.marginUnit || "px";
+
+          // Font size
+          if (adv.fontSize) {
+            if (!st.font) st.font = {};
+            if (!st.font.size) st.font.size = {};
+            for (const dev of ["desktop", "tablet", "mobile"]) {
+              if (adv.fontSize[dev] !== undefined && adv.fontSize[dev] !== null) {
+                if (!st.font.size[dev]) st.font.size[dev] = {};
+                st.font.size[dev].value = adv.fontSize[dev];
+                st.font.size[dev].unit = fsUnit;
+              }
+            }
+          }
+
+          // Width/Height
+          if (adv.width || adv.height) {
+            if (!st.size) st.size = {};
+            for (const dev of ["desktop", "tablet", "mobile"]) {
+              if ((adv.width?.[dev] !== undefined && adv.width[dev] !== null) ||
+                  (adv.height?.[dev] !== undefined && adv.height[dev] !== null)) {
+                if (!st.size[dev]) st.size[dev] = {};
+                st.size[dev].unit = szUnit;
+                if (adv.width?.[dev] !== undefined && adv.width[dev] !== null) st.size[dev].width = adv.width[dev];
+                if (adv.height?.[dev] !== undefined && adv.height[dev] !== null) st.size[dev].height = adv.height[dev];
+              }
+            }
+          }
+
+          // Padding
+          if (adv.padding) {
+            if (!st.font) st.font = {};
+            if (!st.font.padding) st.font.padding = {};
+            for (const dev of ["desktop", "tablet", "mobile"]) {
+              if (adv.padding[dev]) {
+                if (!st.font.padding[dev]) st.font.padding[dev] = {};
+                st.font.padding[dev].unit = padUnitVal;
+                for (const side of ["top", "right", "bottom", "left"]) {
+                  if (adv.padding[dev][side] !== undefined && adv.padding[dev][side] !== null) {
+                    st.font.padding[dev][side] = adv.padding[dev][side];
+                  }
+                }
+              }
+            }
+          }
+
+          // Margin
+          if (adv.margin) {
+            if (!st.margin) st.margin = {};
+            for (const dev of ["desktop", "tablet", "mobile"]) {
+              if (adv.margin[dev]) {
+                if (!st.margin[dev]) st.margin[dev] = {};
+                st.margin[dev].unit = marUnitVal;
+                for (const side of ["top", "right", "bottom", "left"]) {
+                  if (adv.margin[dev][side] !== undefined && adv.margin[dev][side] !== null) {
+                    st.margin[dev][side] = adv.margin[dev][side];
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        await updateItemViaIframe(item.id, item._id, idToken, full, sessionData.store);
+        successCount++;
+        console.log("[Lably SP] Bulk save updated:", item.id);
+      } catch (err) {
+        console.error("[Lably SP] Bulk save failed:", item.id, err);
+        failCount++;
+      }
+    }
+
+    showToast(
+      `Saved: ${successCount} updated${failCount > 0 ? `, ${failCount} failed` : ""}`,
+      failCount > 0 ? "error" : "success"
+    );
+
+    pendingSelectorEdits = {};
+    pendingAdvancedEdits = {};
+    updateBulkSaveBar();
+    busy = false;
+    await loadItems();
+  } catch (err) {
+    showToast("Save failed: " + err.message, "error");
+  } finally {
+    busy = false;
+    bulkSaveApply.disabled = false;
+    bulkSaveCancel.disabled = false;
+  }
+});
 
 // ===========================================================================
 // EXPORT — uses already-loaded allItems data, NO extra network requests
@@ -637,50 +1204,24 @@ btnImport.addEventListener("click", async () => {
 });
 
 // ===========================================================================
-// UPDATE — fetches full item data & updates via lably iframe
+// RENAME MODAL — name transformation for selected items
 // ===========================================================================
-btnUpdateLabels.addEventListener("click", () => openUpdateModal("label"));
-btnUpdateBadges.addEventListener("click", () => openUpdateModal("badge"));
+function openRenameModal() {
+  const targetItems = allItems.filter((i) => selectedIds.has(i.id));
+  if (targetItems.length < 2) return;
 
-function openUpdateModal(mode) {
-  currentUpdateMode = mode;
-  const typeLabel = mode === "label" ? "Labels" : "Badges";
-  modalTitle.textContent = `Update ${typeLabel}`;
-
-  const targetItems = allItems.filter((i) => {
-    if (i.type !== mode) return false;
-    return selectedIds.size === 0 || selectedIds.has(i.id);
-  });
-
-  if (targetItems.length === 0) {
-    showToast(`No ${typeLabel.toLowerCase()} ${selectedIds.size > 0 ? "selected" : "found"}.`, "error");
-    return;
-  }
-
+  modalTitle.textContent = "Rename Items";
   modalBody.innerHTML = `
     <p style="font-size:12px;color:var(--text-secondary);margin-bottom:16px">
-      Updating <strong>${targetItems.length}</strong> ${typeLabel.toLowerCase()}${selectedIds.size > 0 ? " (from selection)" : ""}.
-      Only filled fields will be changed.
+      Renaming <strong>${targetItems.length}</strong> selected items.
     </p>
     <div class="form-section">
-      <div class="form-section-title">Position</div>
-      <div class="form-group">
-        <label class="form-label">Selector</label>
-        <input type="text" class="form-input" id="field-selector" placeholder="e.g., .product-title, #price-block">
-      </div>
-      ${mode === "badge" ? `
-      <div class="form-checkbox-row">
-        <input type="checkbox" id="field-isCustom">
-        <label for="field-isCustom">Use custom position</label>
-      </div>` : ""}
-    </div>
-    <div class="form-section muted">
       <div class="form-section-title">Name Transformation</div>
       <p class="form-help" style="margin-bottom:8px">Removes " (copy)" from names and appends your text.</p>
       <div class="form-group">
         <label class="form-label">Text to Append</label>
         <input type="text" class="form-input" id="field-name-append" placeholder='e.g., v2'>
-        <p class="form-help">Leave empty to skip name transformation.</p>
+        <p class="form-help">Leave empty to only strip " (copy)".</p>
       </div>
     </div>
     <div id="update-progress" style="display:none">
@@ -696,26 +1237,11 @@ modalClose.addEventListener("click", () => (updateModal.style.display = "none"))
 modalCancel.addEventListener("click", () => (updateModal.style.display = "none"));
 
 modalApply.addEventListener("click", async () => {
-  const selectorVal = document.getElementById("field-selector")?.value.trim();
-  const isCustomEl = document.getElementById("field-isCustom");
-  const nameAppend = document.getElementById("field-name-append")?.value.trim();
+  const nameAppend = document.getElementById("field-name-append")?.value.trim() || "";
 
-  const hasSelector = !!selectorVal;
-  const hasIsCustom = isCustomEl ? isCustomEl.checked : false;
-  const hasNameTransform = !!nameAppend;
-
-  if (!hasSelector && !hasNameTransform && !hasIsCustom) {
-    showToast("No changes to apply.", "error");
-    return;
-  }
-
-  const targetItems = allItems.filter((i) => {
-    if (i.type !== currentUpdateMode) return false;
-    return selectedIds.size === 0 || selectedIds.has(i.id);
-  });
-
+  const targetItems = allItems.filter((i) => selectedIds.has(i.id));
   if (targetItems.length === 0) {
-    showToast("No items to update.", "error");
+    showToast("No items selected.", "error");
     return;
   }
 
@@ -742,51 +1268,26 @@ modalApply.addEventListener("click", async () => {
       progressText.textContent = `Processing ${i + 1}/${targetItems.length}: ${item.name}`;
 
       try {
-        // Use already-loaded item data as the base (no re-fetch needed)
-        const backendSettings = JSON.parse(JSON.stringify(item));
+        const full = JSON.parse(JSON.stringify(item));
+        let baseName = full.name.replace(/\s*\(copy\)/gi, "").trim();
+        full.name = nameAppend ? `${baseName} ${nameAppend}` : baseName;
 
-        const changes = {};
-
-        if (hasSelector) {
-          if (!changes.settings) changes.settings = {};
-          if (!changes.settings.position) changes.settings.position = {};
-          changes.settings.position.selector = selectorVal;
-        }
-
-        if (hasIsCustom) {
-          if (!changes.settings) changes.settings = {};
-          if (!changes.settings.position) changes.settings.position = {};
-          if (!changes.settings.position.badge) changes.settings.position.badge = {};
-          changes.settings.position.badge.isCustom = true;
-          changes.settings.position.badge.default = "custom";
-        }
-
-        if (hasNameTransform) {
-          let baseName = backendSettings.name.replace(/\s*\(copy\)\s*$/i, "");
-          changes.name = `${baseName} ${nameAppend}`;
-        }
-
-        const merged = deepMerge(backendSettings, changes);
-
-        console.log('FFFFFFFF', merged)
-
-        await updateItemViaIframe(item.id, item._id, idToken, merged, sessionData.store);
+        await updateItemViaIframe(item.id, item._id, idToken, full, sessionData.store);
         successCount++;
-        console.log("[Lably SP] Updated:", item.id, item.name);
       } catch (err) {
-        console.error("[Lably SP] Update failed:", item.id, err);
+        console.error("[Lably SP] Rename failed:", item.id, err);
         failCount++;
       }
     }
 
     showToast(
-      `Update: ${successCount} success, ${failCount} failed`,
+      `Renamed: ${successCount} success${failCount > 0 ? `, ${failCount} failed` : ""}`,
       failCount > 0 ? "error" : "success"
     );
     busy = false;
     await loadItems();
   } catch (err) {
-    showToast("Update failed: " + err.message, "error");
+    showToast("Rename failed: " + err.message, "error");
   } finally {
     busy = false;
     modalApply.disabled = false;
