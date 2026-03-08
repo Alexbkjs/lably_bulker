@@ -708,6 +708,37 @@ body.dark .item-tag.warning {
   color: var(--text-secondary);
 }
 
+/* Spread toggle (1:N) */
+.adv-spread-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 16px;
+  font-size: 9px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-left: 3px;
+  vertical-align: middle;
+  transition: all 0.15s;
+  line-height: 1;
+}
+
+.adv-spread-toggle:hover {
+  border-color: var(--border-hover);
+  color: var(--text-secondary);
+}
+
+.adv-spread-toggle.active {
+  background: var(--selected-bg);
+  border-color: var(--selected-border);
+  color: var(--selected-border);
+}
+
 .adv-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -774,6 +805,24 @@ body.dark .item-tag.warning {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 4px;
+}
+
+/* Collapsible section toggle */
+.adv-collapse-toggle {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.adv-collapse-toggle:hover {
+  color: var(--text);
+}
+
+.adv-collapse-arrow {
+  font-size: 8px;
+  transition: transform 0.15s;
 }
 
 /* Visibility on pages grid */

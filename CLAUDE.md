@@ -32,6 +32,9 @@ Chrome extension (Manifest V3) with a side panel UI for bulk managing labels and
 - Remix framework: POST actions to `/editor/{id}` need `_data=routes/_app+/editor+/$id` query param for JSON response. Create endpoint (`/editor/new`) returns HTML, not JSON - don't parse the response.
 - `busy` flag prevents feedback loops: `getAdminToken()` triggers inject.js fetch hook which sends session-details back to sidepanel, which could re-trigger `loadItems()`. The `busy` flag blocks this cascade during load/import/update operations.
 - Badge custom selector: when setting a custom selector for badge type, must set BOTH `position.isCustom = true` AND `position.badge.isCustom = true` plus `position.badge.default = "custom"`
+- Data paths: width/height at `settings.styles.sizes` (not `size`), margin at `settings.position.margin` (not `styles.margin`), padding at `settings.styles.font.padding`
+- Visibility pages: stored as full name strings ("Home Page", "Product Pages", etc.), NOT short codes
+- 1:N spread toggle: `*Spread` booleans in pendingAdvancedEdits control whether edits apply to current device or all three. In N mode for padding/margin, changing one side also spreads other sides to all devices.
 
 ### Card interaction model
 - **Card click** toggles advanced mode panel (not selection)

@@ -10,27 +10,6 @@ const SUBTITLES = [
   "Hey superstar, what\u2019s on the list?",
 ];
 
-const VISIBILITY_SHORT = {
-  "Home Page": "HP",
-  "Product Pages": "PP",
-  "Search Results Pages": "SRP",
-  "Cart Page": "CaP",
-  "Collection Pages": "CP",
-  "Other Pages": "OP",
-};
-
-const ALL_PAGE_CODES = ["HP", "PP", "SRP", "CP", "CaP", "OP"];
-const PAGE_NAMES = {
-  HP: "Home Page", PP: "Product Page", SRP: "Search Results Page",
-  CP: "Collection Page", CaP: "Cart Page", OP: "Other Pages",
-};
-const FULL_NAME_TO_CODE = {
-  "Home Page": "HP", "Product Page": "PP", "Product Pages": "PP",
-  "Search Results Page": "SRP", "Search Results Pages": "SRP",
-  "Collection Page": "CP", "Collection Pages": "CP",
-  "Cart Page": "CaP", "Other Pages": "OP", "Other Page": "OP",
-};
-
 // Shape CSS from sel_lably LabelPreview
 const SHAPE_STYLES = {
   rectangle: "",
@@ -484,23 +463,13 @@ function applyFilter() {
 // ===========================================================================
 // RENDER HELPERS
 // ===========================================================================
-function normalizeVisibility(visibility) {
-  if (!Array.isArray(visibility)) return ALL_PAGE_CODES;
-  return visibility
-    .map((v) => {
-      if (typeof v !== "string") return null;
-      if (ALL_PAGE_CODES.includes(v)) return v;
-      return FULL_NAME_TO_CODE[v] || null;
-    })
-    .filter(Boolean);
-}
-
 function getVoPStatus(item) {
-  const pages = normalizeVisibility(item.settings?.visibility);
+  const vis = item.settings?.visibility;
+  const pages = Array.isArray(vis) ? vis.filter((v) => typeof v === "string") : [];
   const full = pages.length >= 6;
   return {
     status: full ? "ok" : "warning",
-    tooltip: full ? "Visible on all pages" : "Visible on: " + pages.map((c) => PAGE_NAMES[c]).join(", "),
+    tooltip: full ? "Visible on all pages" : "Visible on: " + (pages.length ? pages.join(", ") : "none"),
   };
 }
 
@@ -570,6 +539,13 @@ function buildUnitTabs(units, activeUnit, dataAttr) {
   }</span>`;
 }
 
+function buildSpreadToggle(isSpread, dataAttr) {
+  const tip = isSpread
+    ? "Applying to all screen sizes"
+    : "Applying to current screen size only";
+  return `<button class="adv-spread-toggle${isSpread ? " active" : ""}" data-spread-for="${dataAttr}" title="${tip}">${isSpread ? "N" : "1"}</button>`;
+}
+
 function respLabel(full, short) {
   return `<span class="label-full">${full}</span><span class="label-short">${short}</span>`;
 }
@@ -580,15 +556,17 @@ function buildAdvancedPanel(item) {
   const device = adv._device || "desktop";
   const s = item.settings || {};
   const font = s.styles?.font || {};
-  const sizeObj = s.styles?.size || {};
-  const marginObj = s.styles?.margin || {};
+  const sizeObj = s.styles?.sizes || s.styles?.size || {};
+  const marginObj = s.position?.margin || s.styles?.margin || {};
   const paddingObj = font.padding || {};
 
-  // Visibility on pages
-  const currentVisibility = adv.visibility || normalizeVisibility(s.visibility);
-  const visHtml = ALL_PAGE_CODES.map((code) => {
-    const checked = currentVisibility.includes(code) ? "checked" : "";
-    return `<label class="adv-vis-label"><input type="checkbox" data-vis-code="${code}" ${checked}> ${PAGE_NAMES[code]}</label>`;
+  // Visibility on pages — use full names as stored in the API
+  const VIS_PAGES = ["Home Page", "Product Pages", "Search Results Pages", "Cart Page", "Collection Pages", "Other Pages"];
+  const rawVis = adv.visibility || s.visibility || VIS_PAGES;
+  const currentVisibility = Array.isArray(rawVis) ? rawVis : VIS_PAGES;
+  const visHtml = VIS_PAGES.map((page) => {
+    const checked = currentVisibility.includes(page) ? "checked" : "";
+    return `<label class="adv-vis-label"><input type="checkbox" data-vis-page="${esc(page)}" ${checked}> ${esc(page)}</label>`;
   }).join("");
 
   // Unit helpers: read from pending edits first, then from item data
@@ -597,13 +575,19 @@ function buildAdvancedPanel(item) {
   const padUnit = adv.paddingUnit || paddingObj[device]?.unit || paddingObj.desktop?.unit || "px";
   const marUnit = adv.marginUnit || marginObj[device]?.unit || marginObj.desktop?.unit || "px";
 
-  // Value getters - show actual data, empty string means "not set"
+  // Spread toggles (1 = current device only, N = all devices)
+  const fsSpread = !!adv.fontSizeSpread;
+  const sizeSpread = !!adv.sizeSpread;
+  const padSpread = !!adv.paddingSpread;
+  const marSpread = !!adv.marginSpread;
+
+  // Value getters - fall back to desktop if current device has no value
   const val = (v) => (v === null || v === undefined || v === "") ? "" : v;
-  const getFontSize = () => val(adv.fontSize?.[device] ?? font.size?.[device]?.value);
-  const getWidth = () => val(adv.width?.[device] ?? sizeObj[device]?.width);
-  const getHeight = () => val(adv.height?.[device] ?? sizeObj[device]?.height);
-  const getPad = (side) => val(adv.padding?.[device]?.[side] ?? paddingObj[device]?.[side]);
-  const getMar = (side) => val(adv.margin?.[device]?.[side] ?? marginObj[device]?.[side]);
+  const getFontSize = () => val(adv.fontSize?.[device] ?? font.size?.[device]?.value ?? font.size?.desktop?.value);
+  const getWidth = () => val(adv.width?.[device] ?? sizeObj[device]?.width ?? sizeObj.desktop?.width);
+  const getHeight = () => val(adv.height?.[device] ?? sizeObj[device]?.height ?? sizeObj.desktop?.height);
+  const getPad = (side) => val(adv.padding?.[device]?.[side] ?? paddingObj[device]?.[side] ?? paddingObj.desktop?.[side]);
+  const getMar = (side) => val(adv.margin?.[device]?.[side] ?? marginObj[device]?.[side] ?? marginObj.desktop?.[side]);
 
   return `
     <div class="item-advanced-panel" data-adv-id="${esc(id)}">
@@ -615,11 +599,11 @@ function buildAdvancedPanel(item) {
       <div class="adv-group">
         <div class="adv-grid">
           <div class="adv-field adv-field-full">
-            <label>Font Size ${buildUnitTabs(["px", "rem", "em"], fsUnit, "fontSizeUnit")}</label>
+            <label>Font Size ${buildUnitTabs(["px", "rem", "em"], fsUnit, "fontSizeUnit")} ${buildSpreadToggle(fsSpread, "fontSizeSpread")}</label>
             <input type="number" step="any" data-field="fontSize" value="${esc(getFontSize())}" placeholder="-">
           </div>
           <div class="adv-field-full adv-size-header">
-            <span>Width / Height</span>${buildUnitTabs(["px", "%"], sizeUnit, "sizeUnit")}
+            <span>Width / Height</span>${buildUnitTabs(["px", "%"], sizeUnit, "sizeUnit")} ${buildSpreadToggle(sizeSpread, "sizeSpread")}
           </div>
           <div class="adv-field">
             <input type="number" step="any" data-field="width" value="${esc(getWidth())}" placeholder="W">
@@ -630,7 +614,7 @@ function buildAdvancedPanel(item) {
         </div>
       </div>
       <div class="adv-group">
-        <div class="adv-group-title">Padding ${buildUnitTabs(["px", "%"], padUnit, "paddingUnit")}</div>
+        <div class="adv-group-title">Padding ${buildUnitTabs(["px", "%"], padUnit, "paddingUnit")} ${buildSpreadToggle(padSpread, "paddingSpread")}</div>
         <div class="adv-4col">
           <div class="adv-field"><label>${respLabel("Top", "T")}</label><input type="number" step="any" data-field="padding-top" value="${esc(getPad("top"))}" placeholder="-"></div>
           <div class="adv-field"><label>${respLabel("Right", "R")}</label><input type="number" step="any" data-field="padding-right" value="${esc(getPad("right"))}" placeholder="-"></div>
@@ -639,7 +623,7 @@ function buildAdvancedPanel(item) {
         </div>
       </div>
       <div class="adv-group">
-        <div class="adv-group-title">Margin ${buildUnitTabs(["px", "%"], marUnit, "marginUnit")}</div>
+        <div class="adv-group-title">Margin ${buildUnitTabs(["px", "%"], marUnit, "marginUnit")} ${buildSpreadToggle(marSpread, "marginSpread")}</div>
         <div class="adv-4col">
           <div class="adv-field"><label>${respLabel("Top", "T")}</label><input type="number" step="any" data-field="margin-top" value="${esc(getMar("top"))}" placeholder="-"></div>
           <div class="adv-field"><label>${respLabel("Right", "R")}</label><input type="number" step="any" data-field="margin-right" value="${esc(getMar("right"))}" placeholder="-"></div>
@@ -647,9 +631,11 @@ function buildAdvancedPanel(item) {
           <div class="adv-field"><label>${respLabel("Left", "L")}</label><input type="number" step="any" data-field="margin-left" value="${esc(getMar("left"))}" placeholder="-"></div>
         </div>
       </div>
-      <div class="adv-group">
-        <div class="adv-group-title">Visibility on Pages</div>
-        <div class="adv-vis-grid">${visHtml}</div>
+      <div class="adv-group adv-collapsible">
+        <div class="adv-group-title adv-collapse-toggle" data-collapse="vis-${esc(id)}">
+          <span class="adv-collapse-arrow">&#9654;</span> Visibility on Pages
+        </div>
+        <div class="adv-vis-grid adv-collapse-body" id="vis-${esc(id)}" style="display:none">${visHtml}</div>
       </div>
     </div>
   `;
@@ -871,6 +857,73 @@ function renderItems() {
       });
     });
 
+    // Spread toggles (1:N) — switching to N copies current device values to all devices
+    panel.querySelectorAll(".adv-spread-toggle").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const spreadFor = btn.dataset.spreadFor;
+        if (!pendingAdvancedEdits[itemId]) pendingAdvancedEdits[itemId] = {};
+        const adv = pendingAdvancedEdits[itemId];
+        const wasOff = !adv[spreadFor];
+        adv[spreadFor] = wasOff;
+
+        // When switching to N, copy current device values to all devices
+        if (wasOff) {
+          const item = allItems.find((i) => i.id === itemId);
+          const s = item?.settings || {};
+          const device = adv._device || "desktop";
+          const allDevs = ["desktop", "tablet", "mobile"];
+          const font = s.styles?.font || {};
+          const sizeObj = s.styles?.sizes || s.styles?.size || {};
+          const paddingObj = font.padding || {};
+          const marginObj = s.position?.margin || s.styles?.margin || {};
+
+          if (spreadFor === "fontSizeSpread") {
+            const cur = adv.fontSize?.[device] ?? font.size?.[device]?.value ?? font.size?.desktop?.value;
+            if (cur !== undefined && cur !== null) {
+              if (!adv.fontSize) adv.fontSize = {};
+              for (const d of allDevs) adv.fontSize[d] = cur;
+            }
+          } else if (spreadFor === "sizeSpread") {
+            const curW = adv.width?.[device] ?? sizeObj[device]?.width ?? sizeObj.desktop?.width;
+            const curH = adv.height?.[device] ?? sizeObj[device]?.height ?? sizeObj.desktop?.height;
+            if (curW !== undefined && curW !== null) {
+              if (!adv.width) adv.width = {};
+              for (const d of allDevs) adv.width[d] = curW;
+            }
+            if (curH !== undefined && curH !== null) {
+              if (!adv.height) adv.height = {};
+              for (const d of allDevs) adv.height[d] = curH;
+            }
+          } else if (spreadFor === "paddingSpread") {
+            if (!adv.padding) adv.padding = {};
+            for (const side of ["top", "right", "bottom", "left"]) {
+              const cur = adv.padding?.[device]?.[side] ?? paddingObj[device]?.[side] ?? paddingObj.desktop?.[side];
+              if (cur !== undefined && cur !== null) {
+                for (const d of allDevs) {
+                  if (!adv.padding[d]) adv.padding[d] = {};
+                  adv.padding[d][side] = cur;
+                }
+              }
+            }
+          } else if (spreadFor === "marginSpread") {
+            if (!adv.margin) adv.margin = {};
+            for (const side of ["top", "right", "bottom", "left"]) {
+              const cur = adv.margin?.[device]?.[side] ?? marginObj[device]?.[side] ?? marginObj.desktop?.[side];
+              if (cur !== undefined && cur !== null) {
+                for (const d of allDevs) {
+                  if (!adv.margin[d]) adv.margin[d] = {};
+                  adv.margin[d][side] = cur;
+                }
+              }
+            }
+          }
+          updateBulkSaveBar();
+        }
+        renderItems();
+      });
+    });
+
     panel.querySelectorAll("input[data-field]").forEach((inp) => {
       inp.addEventListener("click", (e) => e.stopPropagation());
       inp.addEventListener("change", (e) => {
@@ -881,25 +934,69 @@ function renderItems() {
         const device = adv._device || "desktop";
         const val = inp.value.trim() === "" ? null : Number(inp.value);
 
+        // Determine which devices to write to (1 or N)
+        const allDevs = ["desktop", "tablet", "mobile"];
+        const getDevices = (spreadKey) => adv[spreadKey] ? allDevs : [device];
+
+        // Read item data for spread fallback
+        const item = allItems.find((i) => i.id === itemId);
+        const _s = item?.settings || {};
+        const _font = _s.styles?.font || {};
+        const _sizeObj = _s.styles?.sizes || _s.styles?.size || {};
+        const _paddingObj = _font.padding || {};
+        const _marginObj = _s.position?.margin || _s.styles?.margin || {};
+
         if (field === "fontSize") {
           if (!adv.fontSize) adv.fontSize = {};
-          adv.fontSize[device] = val;
+          for (const d of getDevices("fontSizeSpread")) adv.fontSize[d] = val;
         } else if (field === "width") {
           if (!adv.width) adv.width = {};
-          adv.width[device] = val;
+          for (const d of getDevices("sizeSpread")) adv.width[d] = val;
         } else if (field === "height") {
           if (!adv.height) adv.height = {};
-          adv.height[device] = val;
+          for (const d of getDevices("sizeSpread")) adv.height[d] = val;
         } else if (field.startsWith("padding-")) {
           const side = field.replace("padding-", "");
           if (!adv.padding) adv.padding = {};
-          if (!adv.padding[device]) adv.padding[device] = {};
-          adv.padding[device][side] = val;
+          const targets = getDevices("paddingSpread");
+          for (const d of targets) {
+            if (!adv.padding[d]) adv.padding[d] = {};
+            adv.padding[d][side] = val;
+          }
+          // In N mode, also spread all other sides from current device
+          if (adv.paddingSpread) {
+            for (const otherSide of ["top", "right", "bottom", "left"]) {
+              if (otherSide === side) continue;
+              const cur = adv.padding[device]?.[otherSide] ?? _paddingObj[device]?.[otherSide] ?? _paddingObj.desktop?.[otherSide];
+              if (cur !== undefined && cur !== null) {
+                for (const d of allDevs) {
+                  if (!adv.padding[d]) adv.padding[d] = {};
+                  if (adv.padding[d][otherSide] === undefined) adv.padding[d][otherSide] = cur;
+                }
+              }
+            }
+          }
         } else if (field.startsWith("margin-")) {
           const side = field.replace("margin-", "");
           if (!adv.margin) adv.margin = {};
-          if (!adv.margin[device]) adv.margin[device] = {};
-          adv.margin[device][side] = val;
+          const targets = getDevices("marginSpread");
+          for (const d of targets) {
+            if (!adv.margin[d]) adv.margin[d] = {};
+            adv.margin[d][side] = val;
+          }
+          // In N mode, also spread all other sides from current device
+          if (adv.marginSpread) {
+            for (const otherSide of ["top", "right", "bottom", "left"]) {
+              if (otherSide === side) continue;
+              const cur = adv.margin[device]?.[otherSide] ?? _marginObj[device]?.[otherSide] ?? _marginObj.desktop?.[otherSide];
+              if (cur !== undefined && cur !== null) {
+                for (const d of allDevs) {
+                  if (!adv.margin[d]) adv.margin[d] = {};
+                  if (adv.margin[d][otherSide] === undefined) adv.margin[d][otherSide] = cur;
+                }
+              }
+            }
+          }
         }
 
         // Propagate to all selected
@@ -909,19 +1006,57 @@ function renderItems() {
             if (!pendingAdvancedEdits[sid]) pendingAdvancedEdits[sid] = {};
             const sadv = pendingAdvancedEdits[sid];
             sadv._device = device;
-            if (field === "fontSize") { if (!sadv.fontSize) sadv.fontSize = {}; sadv.fontSize[device] = val; }
-            else if (field === "width") { if (!sadv.width) sadv.width = {}; sadv.width[device] = val; }
-            else if (field === "height") { if (!sadv.height) sadv.height = {}; sadv.height[device] = val; }
-            else if (field.startsWith("padding-")) {
+            if (field === "fontSize") {
+              if (!sadv.fontSize) sadv.fontSize = {};
+              for (const d of getDevices("fontSizeSpread")) sadv.fontSize[d] = val;
+            } else if (field === "width") {
+              if (!sadv.width) sadv.width = {};
+              for (const d of getDevices("sizeSpread")) sadv.width[d] = val;
+            } else if (field === "height") {
+              if (!sadv.height) sadv.height = {};
+              for (const d of getDevices("sizeSpread")) sadv.height[d] = val;
+            } else if (field.startsWith("padding-")) {
               const s = field.replace("padding-", "");
               if (!sadv.padding) sadv.padding = {};
-              if (!sadv.padding[device]) sadv.padding[device] = {};
-              sadv.padding[device][s] = val;
+              for (const d of getDevices("paddingSpread")) {
+                if (!sadv.padding[d]) sadv.padding[d] = {};
+                sadv.padding[d][s] = val;
+              }
+              if (adv.paddingSpread) {
+                const sItem = allItems.find((i) => i.id === sid);
+                const sPadObj = sItem?.settings?.styles?.font?.padding || {};
+                for (const otherSide of ["top", "right", "bottom", "left"]) {
+                  if (otherSide === s) continue;
+                  const cur = sadv.padding[device]?.[otherSide] ?? sPadObj[device]?.[otherSide] ?? sPadObj.desktop?.[otherSide];
+                  if (cur !== undefined && cur !== null) {
+                    for (const d of allDevs) {
+                      if (!sadv.padding[d]) sadv.padding[d] = {};
+                      if (sadv.padding[d][otherSide] === undefined) sadv.padding[d][otherSide] = cur;
+                    }
+                  }
+                }
+              }
             } else if (field.startsWith("margin-")) {
               const s = field.replace("margin-", "");
               if (!sadv.margin) sadv.margin = {};
-              if (!sadv.margin[device]) sadv.margin[device] = {};
-              sadv.margin[device][s] = val;
+              for (const d of getDevices("marginSpread")) {
+                if (!sadv.margin[d]) sadv.margin[d] = {};
+                sadv.margin[d][s] = val;
+              }
+              if (adv.marginSpread) {
+                const sItem = allItems.find((i) => i.id === sid);
+                const sMarObj = sItem?.settings?.position?.margin || sItem?.settings?.styles?.margin || {};
+                for (const otherSide of ["top", "right", "bottom", "left"]) {
+                  if (otherSide === s) continue;
+                  const cur = sadv.margin[device]?.[otherSide] ?? sMarObj[device]?.[otherSide] ?? sMarObj.desktop?.[otherSide];
+                  if (cur !== undefined && cur !== null) {
+                    for (const d of allDevs) {
+                      if (!sadv.margin[d]) sadv.margin[d] = {};
+                      if (sadv.margin[d][otherSide] === undefined) sadv.margin[d][otherSide] = cur;
+                    }
+                  }
+                }
+              }
             }
           });
         }
@@ -931,27 +1066,38 @@ function renderItems() {
     });
 
     // Visibility checkboxes
-    panel.querySelectorAll("input[data-vis-code]").forEach((cb) => {
+    panel.querySelectorAll("input[data-vis-page]").forEach((cb) => {
       cb.addEventListener("click", (e) => e.stopPropagation());
       cb.addEventListener("change", (e) => {
         e.stopPropagation();
         if (!pendingAdvancedEdits[itemId]) pendingAdvancedEdits[itemId] = {};
         const adv = pendingAdvancedEdits[itemId];
-        // Build current visibility from checkboxes
-        const codes = [];
-        panel.querySelectorAll("input[data-vis-code]").forEach((c) => {
-          if (c.checked) codes.push(c.dataset.visCode);
+        const pages = [];
+        panel.querySelectorAll("input[data-vis-page]").forEach((c) => {
+          if (c.checked) pages.push(c.dataset.visPage);
         });
-        adv.visibility = codes;
-        // Propagate to selected
+        adv.visibility = pages;
         if (selectedIds.has(itemId) && selectedIds.size > 1) {
           selectedIds.forEach((sid) => {
             if (sid === itemId) return;
             if (!pendingAdvancedEdits[sid]) pendingAdvancedEdits[sid] = {};
-            pendingAdvancedEdits[sid].visibility = [...codes];
+            pendingAdvancedEdits[sid].visibility = [...pages];
           });
         }
         updateBulkSaveBar();
+      });
+    });
+
+    // Collapsible sections
+    panel.querySelectorAll(".adv-collapse-toggle").forEach((toggle) => {
+      toggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const targetId = toggle.dataset.collapse;
+        const body = document.getElementById(targetId);
+        if (!body) return;
+        const open = body.style.display !== "none";
+        body.style.display = open ? "none" : "";
+        toggle.querySelector(".adv-collapse-arrow").textContent = open ? "\u25B6" : "\u25BC";
       });
     });
   });
@@ -963,7 +1109,9 @@ function renderItems() {
 function hasAdvancedEdits(adv) {
   if (!adv) return false;
   if (adv.visibility) return true;
-  const skipKeys = new Set(["_device", "fontSizeUnit", "sizeUnit", "paddingUnit", "marginUnit", "visibility"]);
+  // Unit changes count as edits
+  if (adv.fontSizeUnit || adv.sizeUnit || adv.paddingUnit || adv.marginUnit) return true;
+  const skipKeys = new Set(["_device", "fontSizeUnit", "sizeUnit", "paddingUnit", "marginUnit", "visibility", "fontSizeSpread", "sizeSpread", "paddingSpread", "marginSpread"]);
   let hasValues = false;
   for (const key of Object.keys(adv)) {
     if (skipKeys.has(key)) continue;
@@ -1066,16 +1214,16 @@ bulkSaveApply.addEventListener("click", async () => {
             }
           }
 
-          // Width/Height
+          // Width/Height — stored under settings.styles.sizes
           if (adv.width || adv.height) {
-            if (!st.size) st.size = {};
+            if (!st.sizes) st.sizes = {};
             for (const dev of ["desktop", "tablet", "mobile"]) {
               if ((adv.width?.[dev] !== undefined && adv.width[dev] !== null) ||
                   (adv.height?.[dev] !== undefined && adv.height[dev] !== null)) {
-                if (!st.size[dev]) st.size[dev] = {};
-                st.size[dev].unit = szUnit;
-                if (adv.width?.[dev] !== undefined && adv.width[dev] !== null) st.size[dev].width = adv.width[dev];
-                if (adv.height?.[dev] !== undefined && adv.height[dev] !== null) st.size[dev].height = adv.height[dev];
+                if (!st.sizes[dev]) st.sizes[dev] = {};
+                st.sizes[dev].unit = szUnit;
+                if (adv.width?.[dev] !== undefined && adv.width[dev] !== null) st.sizes[dev].width = adv.width[dev];
+                if (adv.height?.[dev] !== undefined && adv.height[dev] !== null) st.sizes[dev].height = adv.height[dev];
               }
             }
           }
@@ -1102,16 +1250,18 @@ bulkSaveApply.addEventListener("click", async () => {
             full.settings.visibility = adv.visibility;
           }
 
-          // Margin
+          // Margin — stored under settings.position.margin
           if (adv.margin) {
-            if (!st.margin) st.margin = {};
+            if (!full.settings.position) full.settings.position = {};
+            if (!full.settings.position.margin) full.settings.position.margin = {};
+            const posMargin = full.settings.position.margin;
             for (const dev of ["desktop", "tablet", "mobile"]) {
               if (adv.margin[dev]) {
-                if (!st.margin[dev]) st.margin[dev] = {};
-                st.margin[dev].unit = marUnitVal;
+                if (!posMargin[dev]) posMargin[dev] = {};
+                posMargin[dev].unit = marUnitVal;
                 for (const side of ["top", "right", "bottom", "left"]) {
                   if (adv.margin[dev][side] !== undefined && adv.margin[dev][side] !== null) {
-                    st.margin[dev][side] = adv.margin[dev][side];
+                    posMargin[dev][side] = adv.margin[dev][side];
                   }
                 }
               }

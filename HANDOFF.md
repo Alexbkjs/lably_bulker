@@ -1,4 +1,4 @@
-# Handoff - Lably Bulker Sessions 2-4
+# Handoff - Lably Bulker Sessions 2-5
 
 ## Session 2: UI Overhaul
 
@@ -63,9 +63,41 @@
 ### Loading state
 - Spinner and "Loading items..." text centered horizontally via flexbox row
 
+## Session 5: Advanced Panel — Spread Toggle & Data Path Fixes
+
+### 1:N spread toggle
+- Added `buildSpreadToggle()` — renders a `1`/`N` button next to each unit tab group (font-size, width/height, padding, margin)
+- Tooltip explains current mode: "Applying to current screen size only" vs "Applying to all screen sizes"
+- Switching 1→N copies current device values (with desktop fallback) to all three devices
+- In N mode, editing any field writes to all devices simultaneously
+- For padding/margin in N mode, changing one side also spreads all other sides from the current device to all devices
+- Spread state stored as `fontSizeSpread`, `sizeSpread`, `paddingSpread`, `marginSpread` booleans in `pendingAdvancedEdits`
+- Not added to Visibility on Pages (per spec)
+
+### Data path corrections
+- Width/Height read from `settings.styles.sizes` (not `size`) with fallback to `settings.styles.size`
+- Margin read from `settings.position.margin` (not `styles.margin`) with fallback to `settings.styles.margin`
+- Padding remains at `settings.styles.font.padding`
+
+### Desktop fallback for empty devices
+- All value getters (font-size, width, height, padding sides, margin sides) chain `?? ...desktop` fallback
+- If tablet/mobile have no values, desktop values display instead of empty inputs
+
+### Visibility on Pages overhaul
+- Removed `VISIBILITY_SHORT`, `ALL_PAGE_CODES`, `PAGE_NAMES`, `FULL_NAME_TO_CODE` constants
+- Now stores and reads full page name strings directly: "Home Page", "Product Pages", "Search Results Pages", "Cart Page", "Collection Pages", "Other Pages"
+- Section is collapsible (collapsed by default) with arrow toggle
+
+### Unit switch triggers save
+- `hasAdvancedEdits()` now returns `true` when any unit key (`fontSizeUnit`, `sizeUnit`, `paddingUnit`, `marginUnit`) is set
+- Previously these were in the skip list, so changing unit alone wouldn't enable Save
+
+### Propagate to selected in N mode
+- When editing padding/margin sides in N mode with multiple items selected, other sides are also spread to all devices for each selected item (using each item's own data for fallback values)
+
 ## State tracking
 - `pendingSelectorEdits` — `{ itemId: newSelectorValue }`
-- `pendingAdvancedEdits` — `{ itemId: { fontSize, width, height, padding, margin, visibility, *Unit, _device } }`
+- `pendingAdvancedEdits` — `{ itemId: { fontSize, width, height, padding, margin, visibility, *Unit, *Spread, _device } }`
 - `advancedOpenIds` — Set of card IDs with advanced panel open
 - `selectedIds` — Set of selected item IDs for bulk operations
 - `busy` — prevents feedback loops during async operations
