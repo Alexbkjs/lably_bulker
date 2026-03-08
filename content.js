@@ -19,4 +19,5 @@ window.addEventListener("message", (e) => {
       store: e.data.store,
     });
   }
+
 });

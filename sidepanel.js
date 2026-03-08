@@ -42,10 +42,10 @@ const SHAPE_STYLES = {
   "tag-left": "clip-path:polygon(6px 0, 100% 0, 100% 100%, 6px 100%, 0 50%);",
   "chev-right": "clip-path:polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%, 8px 50%);",
   "chev-left": "clip-path:polygon(8px 0, 100% 0, calc(100% - 8px) 50%, 100% 100%, 8px 100%, 0 50%);",
-  "trapezoid-top-left": "clip-path:polygon(12% 0, 100% 0, 100% 100%, 0 100%);",
-  "trapezoid-top-right": "clip-path:polygon(0 0, 88% 0, 100% 100%, 0 100%);",
-  "trapezoid-bottom-left": "clip-path:polygon(0 0, 100% 0, 100% 100%, 12% 100%);",
-  "trapezoid-bottom-right": "clip-path:polygon(0 0, 100% 0, 88% 100%, 0 100%);",
+  "trapezoid-top-left": "clip-path:polygon(0 0, 100% 0, 0 100%);",
+  "trapezoid-top-right": "clip-path:polygon(0 0, 100% 0, 100% 100%);",
+  "trapezoid-bottom-left": "clip-path:polygon(0 0, 0 100%, 100% 100%);",
+  "trapezoid-bottom-right": "clip-path:polygon(100% 0, 0 100%, 100% 100%);",
   "triangle-top-left": "clip-path:polygon(0 0, 100% 0, 0 100%);",
   "triangle-top-right": "clip-path:polygon(0 0, 100% 0, 100% 100%);",
   "triangle-bottom-left": "clip-path:polygon(0 0, 0 100%, 100% 100%);",
@@ -62,6 +62,8 @@ let busy = false;
 let pendingSelectorEdits = {}; // { itemId: newSelectorValue }
 let pendingAdvancedEdits = {}; // { itemId: { fontSize: {desktop,tablet,mobile}, width: {...}, height: {...}, padding: {...}, margin: {...} } }
 let advancedOpenIds = new Set(); // which cards have the advanced panel open
+let autoSyncTimer = null;
+let lastSyncTime = 0;
 
 // --- DOM ---
 const statusBadge = document.getElementById("status-badge");
@@ -128,13 +130,33 @@ async function init() {
     }
     if (msg.type === "session-details") {
       if (!sessionData) sessionData = {};
+      const prevStore = sessionData.store;
       sessionData.hash = msg.hash;
       sessionData.store = msg.store;
       chrome.storage.local.set({ sessionData });
       updateStatus();
-      if (isConnected() && allItems.length === 0 && !busy) {
+      // Task 3: resync when switching to a different store
+      if (isConnected() && prevStore && prevStore !== msg.store && !busy) {
+        console.log("[Lably SP] Store changed from", prevStore, "to", msg.store, "— resyncing");
+        loadItems();
+      } else if (isConnected() && allItems.length === 0 && !busy) {
         loadItems();
       }
+    }
+    // Auto-sync on lably mutations (create/edit/delete), throttled to 2s
+    if (msg.type === "lably-mutation") {
+      clearTimeout(autoSyncTimer);
+      const elapsed = Date.now() - lastSyncTime;
+      const delay = Math.max(1000, 2000 - elapsed);
+      console.log("[Lably SP] Lably mutation detected, auto-syncing in", delay, "ms...");
+      autoSyncTimer = setTimeout(() => {
+        if (!busy && isConnected()) {
+          lastSyncTime = Date.now();
+          const icon = syncBtn.querySelector(".sync-icon");
+          icon.classList.add("spinning");
+          loadItems().finally(() => icon.classList.remove("spinning"));
+        }
+      }, delay);
     }
   });
 
@@ -190,7 +212,7 @@ function updateButtonStates() {
   const connected = isConnected();
   btnExport.disabled = !connected || selectedIds.size === 0;
   btnImport.disabled = !connected;
-  syncBtn.disabled = !connected || busy;
+  syncBtn.disabled = !connected;
 }
 
 // ===========================================================================
@@ -244,12 +266,20 @@ async function getLablyFrame() {
   if (!adminTabs.length) throw new Error("Open Shopify admin first");
   const tabId = adminTabs[0].id;
 
-  const frames = await chrome.webNavigation.getAllFrames({ tabId });
-  const lablyFrame = frames.find((f) => f.url.includes(LABLY_DOMAIN));
-  if (!lablyFrame) throw new Error("Lably app not open in admin — open the Lably app page first");
-
-  console.log("[Lably SP] Found lably frame:", lablyFrame.frameId, lablyFrame.url.substring(0, 60));
-  return { tabId, frameId: lablyFrame.frameId };
+  // Try up to 5s (5 attempts, 1s apart) to allow the page/iframe to load
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    const lablyFrame = frames.find((f) => f.url.includes(LABLY_DOMAIN));
+    if (lablyFrame) {
+      console.log("[Lably SP] Found lably frame:", lablyFrame.frameId, lablyFrame.url.substring(0, 60));
+      return { tabId, frameId: lablyFrame.frameId };
+    }
+    if (attempt < 4) {
+      console.log("[Lably SP] Lably frame not found, retrying in 1s... (attempt", attempt + 1, "of 5)");
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  throw new Error("Lably app not open in admin — open the Lably app page first");
 }
 
 // Generic helper: run a function inside the lably iframe
@@ -402,7 +432,7 @@ async function loadItems() {
   busy = true;
   console.log("[Lably SP] loadItems()");
   itemsList.innerHTML =
-    '<div class="empty-state"><div class="spinner" style="border-color:var(--border);border-top-color:var(--selected-border);width:20px;height:20px;margin:0 auto 8px"></div>Loading items...</div>';
+    '<div class="empty-state"><div style="display:flex;align-items:center;justify-content:center;gap:8px"><div class="spinner" style="border-color:var(--border);border-top-color:var(--selected-border);width:16px;height:16px"></div><span>Loading items...</span></div></div>';
 
   try {
     const idToken = await getAdminToken();
@@ -419,6 +449,7 @@ async function loadItems() {
     showToast("Failed to load items: " + err.message, "error");
   } finally {
     busy = false;
+    lastSyncTime = Date.now();
   }
 }
 
@@ -515,12 +546,14 @@ function getPreviewHtml(item) {
   const shape = styles?.shape || "rectangle";
   const shapeStyle = SHAPE_STYLES[shape] || "";
 
+  const textValue = item.textValue?.original || (item.type === "badge" ? "Sale" : "Label");
+  const tooltipAttr = `title="${esc(textValue)}"`;
+
   const isImage = item.subtype === "image" && item.previewLink;
   if (isImage) {
-    return `<div class="item-preview-wrap"><img src="${esc(item.previewLink)}" style="width:38px;height:24px;object-fit:contain;border-radius:2px"></div>`;
+    return `<div class="item-preview-wrap" ${tooltipAttr}><img src="${esc(item.previewLink)}" style="width:38px;height:24px;object-fit:contain;border-radius:2px"></div>`;
   }
 
-  const textValue = item.textValue?.original || (item.type === "badge" ? "Sale" : "Label");
   const truncated = textValue.length > 6 ? textValue.substring(0, 5) + ".." : textValue;
 
   // Counter-transform for parallelogram text
@@ -528,7 +561,7 @@ function getPreviewHtml(item) {
   if (shape === "parallelogram-right") textStyle = "transform:skewX(10deg);";
   else if (shape === "parallelogram-left") textStyle = "transform:skewX(-10deg);";
 
-  return `<div class="item-preview-wrap"><div class="item-preview-shape" style="background:${esc(bgColor)};color:${esc(textColor)};${shapeStyle}"><span style="padding:0 2px;${textStyle}">${esc(truncated)}</span></div></div>`;
+  return `<div class="item-preview-wrap" ${tooltipAttr}><div class="item-preview-shape" style="background:${esc(bgColor)};color:${esc(textColor)};${shapeStyle}"><span style="padding:0 2px;${textStyle}">${esc(truncated)}</span></div></div>`;
 }
 
 function buildUnitTabs(units, activeUnit, dataAttr) {
@@ -550,6 +583,13 @@ function buildAdvancedPanel(item) {
   const sizeObj = s.styles?.size || {};
   const marginObj = s.styles?.margin || {};
   const paddingObj = font.padding || {};
+
+  // Visibility on pages
+  const currentVisibility = adv.visibility || normalizeVisibility(s.visibility);
+  const visHtml = ALL_PAGE_CODES.map((code) => {
+    const checked = currentVisibility.includes(code) ? "checked" : "";
+    return `<label class="adv-vis-label"><input type="checkbox" data-vis-code="${code}" ${checked}> ${PAGE_NAMES[code]}</label>`;
+  }).join("");
 
   // Unit helpers: read from pending edits first, then from item data
   const fsUnit = adv.fontSizeUnit || font.size?.[device]?.unit || font.size?.desktop?.unit || "px";
@@ -578,13 +618,14 @@ function buildAdvancedPanel(item) {
             <label>Font Size ${buildUnitTabs(["px", "rem", "em"], fsUnit, "fontSizeUnit")}</label>
             <input type="number" step="any" data-field="fontSize" value="${esc(getFontSize())}" placeholder="-">
           </div>
-          <div class="adv-field">
-            <label>Width ${buildUnitTabs(["px", "%"], sizeUnit, "sizeUnit")}</label>
-            <input type="number" step="any" data-field="width" value="${esc(getWidth())}" placeholder="-">
+          <div class="adv-field-full adv-size-header">
+            <span>Width / Height</span>${buildUnitTabs(["px", "%"], sizeUnit, "sizeUnit")}
           </div>
           <div class="adv-field">
-            <label>Height</label>
-            <input type="number" step="any" data-field="height" value="${esc(getHeight())}" placeholder="-">
+            <input type="number" step="any" data-field="width" value="${esc(getWidth())}" placeholder="W">
+          </div>
+          <div class="adv-field">
+            <input type="number" step="any" data-field="height" value="${esc(getHeight())}" placeholder="H">
           </div>
         </div>
       </div>
@@ -605,6 +646,10 @@ function buildAdvancedPanel(item) {
           <div class="adv-field"><label>${respLabel("Bottom", "B")}</label><input type="number" step="any" data-field="margin-bottom" value="${esc(getMar("bottom"))}" placeholder="-"></div>
           <div class="adv-field"><label>${respLabel("Left", "L")}</label><input type="number" step="any" data-field="margin-left" value="${esc(getMar("left"))}" placeholder="-"></div>
         </div>
+      </div>
+      <div class="adv-group">
+        <div class="adv-group-title">Visibility on Pages</div>
+        <div class="adv-vis-grid">${visHtml}</div>
       </div>
     </div>
   `;
@@ -681,7 +726,6 @@ function renderItems() {
         ${isAdvOpen ? buildAdvancedPanel(item) : ""}
         ${isBadge ? '<div class="item-badge-corner">B</div>' : ""}
         ${isDraft ? '<div class="item-draft-corner">Draft</div>' : ""}
-        <button class="item-advanced-btn${isAdvOpen ? " active" : ""}" data-adv-toggle="${esc(item.id)}" title="Advanced settings">\u{1F9E9}</button>
       </div>
     `;
   }
@@ -715,17 +759,16 @@ function renderItems() {
     });
   });
 
-  // Card click (toggle selection)
+  // Card click → toggle advanced mode (not selection)
   itemsList.querySelectorAll(".item-card").forEach((card) => {
     card.addEventListener("click", (e) => {
       if (e.target.closest(".item-checkbox") || e.target.closest(".item-selector-copy") ||
-          e.target.closest(".item-selector.editable") || e.target.closest(".item-advanced-btn") ||
-          e.target.closest(".item-advanced-panel")) return;
+          e.target.closest(".item-selector.editable") || e.target.closest(".item-advanced-panel") ||
+          e.target.closest(".item-name-editable")) return;
       const id = card.dataset.id;
-      if (selectedIds.has(id)) selectedIds.delete(id);
-      else selectedIds.add(id);
+      if (advancedOpenIds.has(id)) advancedOpenIds.delete(id);
+      else advancedOpenIds.add(id);
       renderItems();
-      updateButtonStates();
     });
   });
 
@@ -789,17 +832,6 @@ function renderItems() {
           renderItems();
         }
       });
-    });
-  });
-
-  // Advanced toggle
-  itemsList.querySelectorAll(".item-advanced-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const id = btn.dataset.advToggle;
-      if (advancedOpenIds.has(id)) advancedOpenIds.delete(id);
-      else advancedOpenIds.add(id);
-      renderItems();
     });
   });
 
@@ -897,6 +929,31 @@ function renderItems() {
         updateBulkSaveBar();
       });
     });
+
+    // Visibility checkboxes
+    panel.querySelectorAll("input[data-vis-code]").forEach((cb) => {
+      cb.addEventListener("click", (e) => e.stopPropagation());
+      cb.addEventListener("change", (e) => {
+        e.stopPropagation();
+        if (!pendingAdvancedEdits[itemId]) pendingAdvancedEdits[itemId] = {};
+        const adv = pendingAdvancedEdits[itemId];
+        // Build current visibility from checkboxes
+        const codes = [];
+        panel.querySelectorAll("input[data-vis-code]").forEach((c) => {
+          if (c.checked) codes.push(c.dataset.visCode);
+        });
+        adv.visibility = codes;
+        // Propagate to selected
+        if (selectedIds.has(itemId) && selectedIds.size > 1) {
+          selectedIds.forEach((sid) => {
+            if (sid === itemId) return;
+            if (!pendingAdvancedEdits[sid]) pendingAdvancedEdits[sid] = {};
+            pendingAdvancedEdits[sid].visibility = [...codes];
+          });
+        }
+        updateBulkSaveBar();
+      });
+    });
   });
 }
 
@@ -905,14 +962,11 @@ function renderItems() {
 // ===========================================================================
 function hasAdvancedEdits(adv) {
   if (!adv) return false;
-  const skipKeys = new Set(["_device", "fontSizeUnit", "sizeUnit", "paddingUnit", "marginUnit"]);
+  if (adv.visibility) return true;
+  const skipKeys = new Set(["_device", "fontSizeUnit", "sizeUnit", "paddingUnit", "marginUnit", "visibility"]);
   let hasValues = false;
-  let hasUnitChange = false;
   for (const key of Object.keys(adv)) {
-    if (skipKeys.has(key)) {
-      if (key !== "_device") hasUnitChange = true;
-      continue;
-    }
+    if (skipKeys.has(key)) continue;
     const val = adv[key];
     if (val && typeof val === "object") {
       for (const dk of Object.keys(val)) {
@@ -979,6 +1033,13 @@ bulkSaveApply.addEventListener("click", async () => {
         if (selectorEdits[itemId] !== undefined) {
           if (!full.settings.position) full.settings.position = {};
           full.settings.position.selector = selectorEdits[itemId];
+          // For badges, set both isCustom flags
+          if (full.type === "badge") {
+            full.settings.position.isCustom = true;
+            if (!full.settings.position.badge) full.settings.position.badge = {};
+            full.settings.position.badge.default = "custom";
+            full.settings.position.badge.isCustom = true;
+          }
         }
 
         // Apply advanced edits
@@ -1034,6 +1095,11 @@ bulkSaveApply.addEventListener("click", async () => {
                 }
               }
             }
+          }
+
+          // Visibility
+          if (adv.visibility) {
+            full.settings.visibility = adv.visibility;
           }
 
           // Margin
@@ -1337,15 +1403,23 @@ function esc(s) {
 function showToast(message, type = "info") {
   console.log("[Lably SP] Toast:", type, message);
   document.querySelector(".toast")?.remove();
+  const icons = { success: "\u2713", error: "\u2717", info: "i" };
   const t = document.createElement("div");
   t.className = `toast ${type}`;
-  t.textContent = message;
+  t.innerHTML = `<span class="toast-icon">${icons[type] || "i"}</span><span class="toast-msg"></span><button class="toast-close">Close</button>`;
+  t.querySelector(".toast-msg").textContent = message;
+  t.querySelector(".toast-close").addEventListener("click", () => {
+    t.classList.remove("show");
+    setTimeout(() => t.remove(), 200);
+  });
   document.body.appendChild(t);
   requestAnimationFrame(() => t.classList.add("show"));
   setTimeout(() => {
-    t.classList.remove("show");
-    setTimeout(() => t.remove(), 200);
-  }, 3000);
+    if (t.parentNode) {
+      t.classList.remove("show");
+      setTimeout(() => t.remove(), 200);
+    }
+  }, 4000);
 }
 
 // ===========================================================================

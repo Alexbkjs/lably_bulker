@@ -9,7 +9,8 @@
     "activeTab",
     "scripting",
     "tabs",
-    "webNavigation"
+    "webNavigation",
+    "webRequest"
   ],
   "host_permissions": [
     "*://admin.shopify.com/*",

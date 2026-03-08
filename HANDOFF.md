@@ -1,50 +1,82 @@
-# Handoff - Lably Bulker UI Overhaul (Session 2)
+# Handoff - Lably Bulker Sessions 2-4
 
-## What was done
+## Session 2: UI Overhaul
 
-### 1. Sync/Refresh button
-- Added a refresh icon button in the header (next to theme toggle)
-- Clicking it re-fetches data from the store without a full page reload
-- Spinner animation while syncing; disabled state when not connected
+### Shape-aware card previews
+- Labels/badges render with correct shape (rectangle, circle, parallelogram, tag, ribbon, trapezoid, triangle, chevron) via clip-path/transform
+- Trapezoid shapes map to corner triangles matching the app's actual rendering
+- Preview shows tooltip with full text value on hover
 
-### 2. Card UI redesign (matching sel_lably reference)
-- **Shape-aware preview**: Labels/badges render with correct shape (rectangle, circle, parallelogram, tag, ribbon, etc.) using clip-path and transform styles ported from sel_lably's `LabelPreview.tsx`
-- **Status indicators**: All 4 tags (VoP, WS, DP, DC) now display with ok/warning states and hover tooltips, matching sel_lably's `StatusIndicator.tsx` logic
-- **Badge corner tag**: Only badges show a red "B" corner tag (bottom-right); labels have no corner indicator
-- **Draft styling**: Draft items show greyed-out title + a "DRAFT" badge inside the card (bottom-right, next to "B" for badges)
-- **Inline selector editing**: Click the selector value to edit it; changes propagate to all selected items on save
+### Status indicators
+- All 4 tags (VoP, WS, DP, DC) display with ok/warning states and hover tooltips
+- Logic ported from sel_lably's StatusIndicator.tsx
 
-### 3. Advanced mode (puzzle icon)
-- Grey puzzle emoji button on each card (bottom-left corner)
-- Opens per-card panel with device tabs (Desktop/Tablet/Mobile)
-- Editable fields: font-size, width, height, padding (T/R/B/L), margin (T/R/B/L)
-- Unit selectors: font-size supports px/rem/em; width/height supports px/%; padding/margin supports px/%
-- Responsive labels: full names (Top, Right...) on wide panels, abbreviations (T, R...) on narrow
-- Changes to one selected item propagate to all selected items on bulk save
+### Card interaction
+- Card click toggles advanced mode panel (not selection)
+- Checkbox is the only way to select/deselect items
+- No puzzle icon — panel opens/closes directly on card body click
 
-### 4. Rename via clickable name
-- When 2+ items are selected, their names get a dashed underline and become clickable
-- Clicking opens the rename modal: strips ALL "(copy)" occurrences (global regex) and optionally appends text
-- Removed the separate "Rename" button from the select-all row
+### Inline editing
+- Selector: click to edit, changes propagate to all selected items
+- Name: clickable when 2+ items selected, opens rename modal (strips all "(copy)" globally, optional append)
 
-### 5. Removed features
-- "Update Labels" / "Update Badges" buttons removed (replaced by advanced mode + inline editing)
-- DRAFT status badge removed from ID row (replaced by corner badge + greyed title)
-- `.btn-mode` and `.item-status` CSS rules cleaned up
+### Draft styling
+- Draft items show greyed title + "DRAFT" corner badge inside card
+- Badge "B" corner tag for badge-type items only; when both exist, DRAFT shifts left
 
-## Key files changed
-- `sidepanel.html` - Removed update buttons row, added sync button in header
-- `sidepanel.css` - Shape preview, status tags, badge corner, draft corner, advanced panel, unit tabs, inline editing, rename styles, theme variables
-- `sidepanel.js` - Shape rendering, status indicator logic, advanced panel builder, unit switching, inline selector/name editing, bulk save with deep merge, rename modal with global (copy) removal
+### Advanced mode panel
+- Per-device tabs (Desktop/Tablet/Mobile)
+- Font-size with px/rem/em unit selector
+- Width/Height with shared px/% unit selector (aligned in same header row)
+- Padding (T/R/B/L) with px/% unit selector
+- Margin (T/R/B/L) with px/% unit selector
+- Visibility on Pages checkboxes (HP, PP, SRP, CP, CaP, OP)
+- Responsive labels: full names on wide panels, abbreviations on narrow
+- All changes propagate to selected items on bulk save
+
+## Session 3: Auto-sync, Fixes & Polish
+
+### Auto-sync (webRequest)
+- `chrome.webRequest.onCompleted` in background.js listens for POST to `*://lably.devit.software/*`
+- Sends `lably-mutation` to sidepanel which debounces (1s min) and throttles (2s between syncs)
+- `lastSyncTime` tracks last sync completion; auto-sync won't fire if less than 2s elapsed
+- `busy` flag prevents auto-sync during own operations
+
+### Store switch resync
+- session-details handler compares previous store name with new; triggers loadItems() on change
+
+### Lably frame retry
+- `getLablyFrame()` retries 5 times (1s apart) before showing error, allowing iframe to load
+
+### Badge custom position
+- Setting custom selector for badge now sets both `position.isCustom = true` AND `position.badge.isCustom = true` plus `position.badge.default = "custom"`
+
+### Button styles
+- Export/Import: pill shape (border-radius:50px), gradient, shadow drops on hover, opacity on active
+- Removed glass overlay for these buttons
+
+### Toast redesign
+- Dark card (#2d3748) with colored bottom border per type
+- Icon circle (checkmark/X/i) on left, message text, "Close" button on right
+- Auto-dismisses after 4s
+
+### Loading state
+- Spinner and "Loading items..." text centered horizontally via flexbox row
 
 ## State tracking
-- `pendingSelectorEdits` - `{ itemId: newSelectorValue }` for inline selector changes
-- `pendingAdvancedEdits` - `{ itemId: { fontSize, width, height, padding, margin, *Unit } }` per device
-- `advancedOpenIds` - Set of card IDs with advanced panel open
-- `selectedIds` - Set of selected item IDs for bulk operations
-- `busy` flag - prevents feedback loops during async operations
+- `pendingSelectorEdits` — `{ itemId: newSelectorValue }`
+- `pendingAdvancedEdits` — `{ itemId: { fontSize, width, height, padding, margin, visibility, *Unit, _device } }`
+- `advancedOpenIds` — Set of card IDs with advanced panel open
+- `selectedIds` — Set of selected item IDs for bulk operations
+- `busy` — prevents feedback loops during async operations
+- `lastSyncTime` — timestamp of last loadItems completion, for throttling
+- `autoSyncTimer` — debounce timer for mutation auto-sync
 
-## Known patterns
-- Bulk save bar appears when any pending edits exist; Cancel clears edits, Save pushes via iframe
-- Advanced edits are deep-merged with existing item data before API call
-- Unit choices persist in `pendingAdvancedEdits` and get written to the item on save
+## Key files changed
+- `manifest.json` — Added `webRequest` permission
+- `background.js` — Added webRequest mutation listener
+- `inject.js` — Unchanged (mutations caught by webRequest instead)
+- `content.js` — Added lably-mutation forwarding (unused now, kept for future)
+- `sidepanel.html` — Sync button in header, removed update buttons
+- `sidepanel.css` — Full restyle: button pills, toast redesign, advanced panel, visibility grid, size header alignment, draft/badge corners
+- `sidepanel.js` — Auto-sync, store switch, frame retry, advanced panel with visibility, badge isCustom fix, throttling, toast redesign

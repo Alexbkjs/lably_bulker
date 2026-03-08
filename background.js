@@ -4,6 +4,18 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 console.log("[Lably BG] Service worker started");
 
+// Auto-sync: listen for POST requests to lably (create/edit/delete)
+chrome.webRequest.onCompleted.addListener(
+  (details) => {
+    if (details.method === "POST") {
+      console.log("[Lably BG] Lably POST detected:", details.url.substring(0, 80));
+      // Notify sidepanel
+      chrome.runtime.sendMessage({ type: "lably-mutation" }).catch(() => {});
+    }
+  },
+  { urls: ["*://lably.devit.software/*"] }
+);
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "csrf-token") {
     chrome.storage.local.get("sessionData", ({ sessionData }) => {
