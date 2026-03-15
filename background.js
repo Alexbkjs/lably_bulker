@@ -16,6 +16,18 @@ chrome.webRequest.onCompleted.addListener(
   { urls: ["*://lably.devit.software/*"] }
 );
 
+// Track admin tab URL changes — detect navigation to/from Lably app page
+const LABLY_APP_PATH = "/apps/product-labels-and-badges";
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!changeInfo.url || !tab.url?.includes("admin.shopify.com")) return;
+  const isLablyPage = tab.url.includes(LABLY_APP_PATH);
+  chrome.runtime.sendMessage({
+    type: "admin-navigation",
+    url: tab.url,
+    isLablyPage,
+  }).catch(() => {});
+});
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "csrf-token") {
     chrome.storage.local.get("sessionData", ({ sessionData }) => {

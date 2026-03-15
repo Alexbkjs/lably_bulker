@@ -94,18 +94,27 @@ async function init() {
   updateStatus();
 
   if (isConnected()) {
-    console.log("[Lably SP] Connected, loading items...");
-    await loadItems();
+    const onLablyPage = await checkAdminTabUrl();
+    if (onLablyPage) {
+      console.log("[Lably SP] Connected & on Lably page, loading items...");
+      await loadItems();
+    } else {
+      console.log("[Lably SP] Connected but not on Lably app page — disconnecting");
+      disconnectStore("Open the Lably app in Shopify admin to connect");
+    }
   } else {
     console.log("[Lably SP] Not connected. csrf:", !!sessionData?.csrfToken, "hash:", !!sessionData?.hash, "store:", !!sessionData?.store);
   }
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "csrf-token") {
-      if (!sessionData) sessionData = {};
-      sessionData.csrfToken = msg.token;
-      chrome.storage.local.set({ sessionData });
-      updateStatus();
+      checkAdminTabUrl().then((onLablyPage) => {
+        if (!onLablyPage) return;
+        if (!sessionData) sessionData = {};
+        sessionData.csrfToken = msg.token;
+        chrome.storage.local.set({ sessionData });
+        updateStatus();
+      });
     }
     if (msg.type === "session-details") {
       if (!sessionData) sessionData = {};
@@ -113,14 +122,23 @@ async function init() {
       sessionData.hash = msg.hash;
       sessionData.store = msg.store;
       chrome.storage.local.set({ sessionData });
-      updateStatus();
-      // Task 3: resync when switching to a different store
-      if (isConnected() && prevStore && prevStore !== msg.store && !busy) {
-        console.log("[Lably SP] Store changed from", prevStore, "to", msg.store, "— resyncing");
-        loadItems();
-      } else if (isConnected() && allItems.length === 0 && !busy) {
-        loadItems();
-      }
+      // Only auto-load if on the Lably app page
+      checkAdminTabUrl().then((onLablyPage) => {
+        if (!onLablyPage) {
+          console.log("[Lably SP] Session details received but not on Lably page — ignoring");
+          sessionData = null;
+          chrome.storage.local.remove("sessionData");
+          updateStatus();
+          return;
+        }
+        updateStatus();
+        if (isConnected() && prevStore && prevStore !== msg.store && !busy) {
+          console.log("[Lably SP] Store changed from", prevStore, "to", msg.store, "— resyncing");
+          loadItems();
+        } else if (isConnected() && allItems.length === 0 && !busy) {
+          loadItems();
+        }
+      });
     }
     // Auto-sync on lably mutations (create/edit/delete), throttled to 2s
     if (msg.type === "lably-mutation") {
@@ -137,11 +155,28 @@ async function init() {
         }
       }, delay);
     }
+    // Navigation tracking — disconnect when leaving Lably page, connect when arriving
+    if (msg.type === "admin-navigation") {
+      if (!msg.isLablyPage && isConnected()) {
+        console.log("[Lably SP] Navigated away from Lably app:", msg.url.substring(0, 80));
+        disconnectStore("Open the Lably app in Shopify admin to connect");
+      } else if (msg.isLablyPage && !isConnected() && !busy) {
+        console.log("[Lably SP] Navigated to Lably app, waiting for session...");
+        // Session details will arrive via inject.js → content.js → here;
+        // loadItems will trigger once session-details message sets full sessionData
+      }
+    }
   });
 
-  chrome.tabs.onActivated.addListener(() =>
-    setTimeout(() => updateStatus(), 300)
-  );
+  chrome.tabs.onActivated.addListener(async () => {
+    setTimeout(async () => {
+      const onLablyPage = await checkAdminTabUrl();
+      if (!onLablyPage && isConnected()) {
+        disconnectStore("Open the Lably app in Shopify admin to connect");
+      }
+      updateStatus();
+    }, 300);
+  });
 }
 
 // ===========================================================================
@@ -194,6 +229,26 @@ function updateButtonStates() {
   syncBtn.disabled = !connected;
 }
 
+function disconnectStore(reason) {
+  console.log("[Lably SP] Disconnecting:", reason);
+  sessionData = null;
+  chrome.storage.local.remove("sessionData");
+  allItems = [];
+  filteredItems = [];
+  selectedIds.clear();
+  advancedOpenIds.clear();
+  pendingSelectorEdits = {};
+  pendingAdvancedEdits = {};
+  updateStatus();
+  itemsList.innerHTML = `<div class="empty-state">${esc(reason)}</div>`;
+}
+
+async function checkAdminTabUrl() {
+  const adminTabs = await chrome.tabs.query({ url: "*://admin.shopify.com/*" });
+  if (!adminTabs.length) return false;
+  return adminTabs.some((t) => t.url?.includes(LABLY_APP_PATH));
+}
+
 // ===========================================================================
 // TOKEN — runs in admin tab MAIN world (same-origin to Shopify API)
 // ===========================================================================
@@ -238,169 +293,103 @@ async function getAdminToken() {
 }
 
 // ===========================================================================
-// LABLY IFRAME — find the iframe and execute API calls inside it (same-origin)
+// LABLY API — direct fetch from sidepanel (host_permissions grant CORS access)
 // ===========================================================================
-async function getLablyFrame() {
-  const adminTabs = await chrome.tabs.query({ url: "*://admin.shopify.com/*" });
-  if (!adminTabs.length) throw new Error("Open Shopify admin first");
-  const tabId = adminTabs[0].id;
+const LABLY_APP_PATH = "/apps/product-labels-and-badges";
+const LABLY_BASE = "https://" + LABLY_DOMAIN;
 
-  // Try up to 5s (5 attempts, 1s apart) to allow the page/iframe to load
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const frames = await chrome.webNavigation.getAllFrames({ tabId });
-    const lablyFrame = frames.find((f) => f.url.includes(LABLY_DOMAIN));
-    if (lablyFrame) {
-      console.log("[Lably SP] Found lably frame:", lablyFrame.frameId, lablyFrame.url.substring(0, 60));
-      return { tabId, frameId: lablyFrame.frameId };
-    }
-    if (attempt < 4) {
-      console.log("[Lably SP] Lably frame not found, retrying in 1s... (attempt", attempt + 1, "of 5)");
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
-  throw new Error("Lably app not open in admin — open the Lably app page first");
-}
-
-// Generic helper: run a function inside the lably iframe
-async function runInLablyFrame(func, args = []) {
-  const { tabId, frameId } = await getLablyFrame();
-
-  const results = await chrome.scripting.executeScript({
-    target: { tabId, frameIds: [frameId] },
-    world: "MAIN",
-    func,
-    args,
-  });
-
-  const res = results?.[0]?.result;
-  if (res?.error) throw new Error(res.error);
-  return res;
+async function lablyFetch(path, options = {}) {
+  const url = LABLY_BASE + path;
+  console.log("[Lably SP] lablyFetch:", options.method || "GET", path.substring(0, 80));
+  const r = await fetch(url, options);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r;
 }
 
 // ===========================================================================
 // API CALLS — all run inside the lably iframe (same-origin to lably)
 // ===========================================================================
 async function fetchAllItemsViaIframe(idToken, store) {
-  console.log("[Lably SP] fetchAllItemsViaIframe()");
-  return runInLablyFrame(
-    async (idToken, store) => {
-      try {
-        const params = new URLSearchParams({
-          embedded: "1",
-          id_token: idToken,
-          locale: "en",
-          shop: store + ".myshopify.com",
-          _data: "routes/_app+/_index",
-        });
-        const r = await fetch("/?" + params, {
-          headers: {
-            Accept: "*/*",
-            Authorization: "Bearer " + idToken,
-            "X-Requested-With": "XMLHttpRequest",
-          },
-        });
-        if (!r.ok) return { error: "HTTP " + r.status };
-        const data = await r.json();
-        return { items: data.allItems || data.items || [] };
-      } catch (e) {
-        return { error: e.message };
-      }
+  console.log("[Lably SP] fetchAllItems()");
+  const params = new URLSearchParams({
+    embedded: "1",
+    id_token: idToken,
+    locale: "en",
+    shop: store + ".myshopify.com",
+    _data: "routes/_app+/_index",
+  });
+  const r = await lablyFetch("/?" + params, {
+    headers: {
+      Accept: "*/*",
+      Authorization: "Bearer " + idToken,
+      "X-Requested-With": "XMLHttpRequest",
     },
-    [idToken, sessionData.store]
-  );
+  });
+  const data = await r.json();
+  return { items: data.allItems || data.items || [] };
 }
 
 async function fetchItemDataViaIframe(editorId, idToken) {
-  console.log("[Lably SP] fetchItemDataViaIframe:", editorId);
-  return runInLablyFrame(
-    async (editorId, idToken) => {
-      try {
-        const r = await fetch(
-          "/editor/" + editorId + "?_data=routes%2F_app%2B%2Feditor%2B%2F%24id",
-          {
-            headers: {
-              Accept: "*/*",
-              Authorization: "Bearer " + idToken,
-              "X-Requested-With": "XMLHttpRequest",
-            },
-          }
-        );
-        if (!r.ok) return { error: "HTTP " + r.status };
-        const data = await r.json();
-        console.log("[Lably iframe] fetchItem response keys:", JSON.stringify(Object.keys(data)));
-        // Handle Remix DataWithResponseInit wrapper
-        const actual = data.data !== undefined ? data.data : data;
-        const item = actual?.item || actual;
-        return { item: item };
-      } catch (e) {
-        return { error: e.message };
-      }
-    },
-    [editorId, idToken]
+  console.log("[Lably SP] fetchItemData:", editorId);
+  const r = await lablyFetch(
+    "/editor/" + editorId + "?_data=routes%2F_app%2B%2Feditor%2B%2F%24id",
+    {
+      headers: {
+        Accept: "*/*",
+        Authorization: "Bearer " + idToken,
+        "X-Requested-With": "XMLHttpRequest",
+      },
+    }
   );
+  const data = await r.json();
+  console.log("[Lably SP] fetchItem response keys:", JSON.stringify(Object.keys(data)));
+  // Handle Remix DataWithResponseInit wrapper
+  const actual = data.data !== undefined ? data.data : data;
+  const item = actual?.item || actual;
+  return { item: item };
 }
 
 async function updateItemViaIframe(editorId, mongoId, idToken, fullSettings, store) {
-  console.log("[Lably SP] updateItemViaIframe:", editorId, "mongoId:", mongoId);
-  return runInLablyFrame(
-    async (editorId, mongoId, idToken, fullSettings, store) => {
-      try {
-        const params = new URLSearchParams({
-          embedded: "1",
-          fullscreen: "1",
-          id_token: idToken,
-          shop: store + ".myshopify.com",
-          _data: "routes/_app+/editor+/$id",
-        });
-        const r = await fetch("/editor/" + editorId + "?" + params, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "*/*",
-            Authorization: "Bearer " + idToken,
-            "X-Requested-With": "XMLHttpRequest",
-          },
-          body: JSON.stringify({
-            _action: "update",
-            data: { settings: fullSettings, id: mongoId, isStatusToggle: false },
-          }),
-        });
-        if (!r.ok) return { error: "HTTP " + r.status };
-        return { ok: true, status: r.status };
-      } catch (e) {
-        return { error: e.message };
-      }
+  console.log("[Lably SP] updateItem:", editorId, "mongoId:", mongoId);
+  const params = new URLSearchParams({
+    embedded: "1",
+    fullscreen: "1",
+    id_token: idToken,
+    shop: store + ".myshopify.com",
+    _data: "routes/_app+/editor+/$id",
+  });
+  const r = await lablyFetch("/editor/" + editorId + "?" + params, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "*/*",
+      Authorization: "Bearer " + idToken,
+      "X-Requested-With": "XMLHttpRequest",
     },
-    [editorId, mongoId, idToken, fullSettings, sessionData.store]
-  );
+    body: JSON.stringify({
+      _action: "update",
+      data: { settings: fullSettings, id: mongoId, isStatusToggle: false },
+    }),
+  });
+  return { ok: true, status: r.status };
 }
 
 async function createItemViaIframe(idToken, itemData, store) {
-  console.log("[Lably SP] createItemViaIframe:", itemData.name);
-  return runInLablyFrame(
-    async (idToken, itemData, store) => {
-      try {
-        const r = await fetch("/editor/new", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "*/*",
-            Authorization: "Bearer " + idToken,
-            "X-Requested-With": "XMLHttpRequest",
-          },
-          body: JSON.stringify({
-            _action: "create",
-            data: { settings: itemData, isStatusToggle: false },
-          }),
-        });
-        if (!r.ok) return { error: "HTTP " + r.status };
-        return { ok: true, status: r.status };
-      } catch (e) {
-        return { error: e.message };
-      }
+  console.log("[Lably SP] createItem:", itemData.name);
+  const r = await lablyFetch("/editor/new", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "*/*",
+      Authorization: "Bearer " + idToken,
+      "X-Requested-With": "XMLHttpRequest",
     },
-    [idToken, itemData, sessionData.store]
-  );
+    body: JSON.stringify({
+      _action: "create",
+      data: { settings: itemData, isStatusToggle: false },
+    }),
+  });
+  return { ok: true, status: r.status };
 }
 
 // ===========================================================================

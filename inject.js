@@ -12,29 +12,33 @@
   }
 
   window.fetch = async function (resource, config = {}) {
-    const url = typeof resource === "string" ? resource : resource.url;
+    try {
+      const url = typeof resource === "string" ? resource : resource.url;
 
-    // Capture CSRF token
-    const token =
-      config?.headers?.["X-CSRF-Token"] ||
-      config?.headers?.["x-csrf-token"];
-    if (token) {
-      console.log("[Lably inject] CSRF token found");
-      window.postMessage({ type: "lably-csrf-token", token }, "*");
-    }
+      // Capture CSRF token
+      const token =
+        config?.headers?.["X-CSRF-Token"] ||
+        config?.headers?.["x-csrf-token"];
+      if (token) {
+        console.log("[Lably inject] CSRF token found");
+        window.postMessage({ type: "lably-csrf-token", token }, "*");
+      }
 
-    // Capture hash + store name from GenerateSessionToken calls
-    const details = extractFromUrl(url);
-    if (details) {
-      console.log("[Lably inject] Session details found:", details.store);
-      window.postMessage(
-        {
-          type: "lably-session-details",
-          hash: details.hash,
-          store: details.store,
-        },
-        "*"
-      );
+      // Capture hash + store name from GenerateSessionToken calls
+      const details = extractFromUrl(url);
+      if (details) {
+        console.log("[Lably inject] Session details found:", details.store);
+        window.postMessage(
+          {
+            type: "lably-session-details",
+            hash: details.hash,
+            store: details.store,
+          },
+          "*"
+        );
+      }
+    } catch (e) {
+      console.warn("[Lably inject] hook error:", e);
     }
 
     return origFetch.apply(this, arguments);
